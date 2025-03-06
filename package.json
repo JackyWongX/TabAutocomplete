@@ -1,0 +1,210 @@
+{
+  "name": "vscode-ollama-code-completion",
+  "displayName": "Ollama 代码补全",
+  "description": "使用本地部署的Ollama模型进行智能代码补全",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "code completion",
+    "ai",
+    "ollama",
+    "autocomplete",
+    "intellisense"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ollamaCodeCompletion.enable",
+        "title": "启用 Ollama 代码补全"
+      },
+      {
+        "command": "ollamaCodeCompletion.disable",
+        "title": "禁用 Ollama 代码补全"
+      },
+      {
+        "command": "ollamaCodeCompletion.selectModel",
+        "title": "选择 Ollama 模型"
+      },
+      {
+        "command": "ollamaCodeCompletion.clearCache",
+        "title": "清除代码补全缓存"
+      },
+      {
+        "command": "ollamaCodeCompletion.testConnection",
+        "title": "测试 Ollama 连接"
+      },
+      {
+        "command": "ollamaCodeCompletion.showConfig",
+        "title": "显示当前配置"
+      },
+      {
+        "command": "ollamaCompletion.applyCompletion",
+        "title": "应用代码补全"
+      },
+      {
+        "command": "ollamaCompletion.applyCompletionForCompletionItem",
+        "title": "应用补全项内容"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ollamaCompletion.applyCompletion",
+        "key": "alt+\\",
+        "when": "editorTextFocus && !suggestWidgetVisible"
+      }
+    ],
+    "configuration": {
+      "title": "Ollama 代码补全",
+      "properties": {
+        "ollamaCodeCompletion.general.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用或禁用 Ollama 代码补全功能"
+        },
+        "ollamaCodeCompletion.general.triggerDelay": {
+          "type": "number",
+          "default": 300,
+          "description": "触发代码补全的延迟时间（毫秒）"
+        },
+        "ollamaCodeCompletion.model.url": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama API 的 URL 地址"
+        },
+        "ollamaCodeCompletion.model.name": {
+          "type": "string",
+          "default": "codellama:7b",
+          "description": "使用的 Ollama 模型名称"
+        },
+        "ollamaCodeCompletion.model.temperature": {
+          "type": "number",
+          "default": 0.3,
+          "description": "模型生成的温度参数（0-1），较低值生成更确定性的结果"
+        },
+        "ollamaCodeCompletion.model.maxTokens": {
+          "type": "number",
+          "default": 300,
+          "description": "每次补全生成的最大 token 数"
+        },
+        "ollamaCodeCompletion.context.maxLines": {
+          "type": "number",
+          "default": 100,
+          "description": "提供给模型的上下文最大行数"
+        },
+        "ollamaCodeCompletion.context.includeImports": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否在上下文中包含导入/引用语句"
+        },
+        "ollamaCodeCompletion.context.includeComments": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否在上下文中包含注释"
+        },
+        "ollamaCodeCompletion.context.surroundingLines": {
+          "type": "number",
+          "default": 5,
+          "description": "按回车键触发补全时，包含当前行的上下文行数"
+        },
+        "ollamaCodeCompletion.cache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用代码补全缓存"
+        },
+        "ollamaCodeCompletion.cache.retentionPeriodHours": {
+          "type": "number",
+          "default": 24,
+          "description": "缓存保留时间（小时）"
+        },
+        "ollamaCodeCompletion.cache.maxSnippets": {
+          "type": "number",
+          "default": 1000,
+          "description": "最大缓存条目数"
+        },
+        "ollamaCodeCompletion.fileTypes.enabled": {
+          "type": "array",
+          "default": [
+            ".js",
+            ".ts",
+            ".py",
+            ".java",
+            "*"
+          ],
+          "description": "启用代码补全的文件类型（例如 .js, .py）"
+        },
+        "ollamaCodeCompletion.fileTypes.disabled": {
+          "type": "array",
+          "default": [
+            ".md",
+            ".txt"
+          ],
+          "description": "禁用代码补全的文件类型"
+        },
+        "ollamaCodeCompletion.debug.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否启用调试日志"
+        },
+        "ollamaCodeCompletion.debug.logLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error", "none"],
+          "default": "info",
+          "description": "日志级别 (debug, info, warn, error, none)"
+        },
+        "ollamaCodeCompletion.debug.logPerformance": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否记录性能指标"
+        },
+        "ollamaCodeCompletion.advanced.adaptToProjectSize": {
+          "type": "boolean",
+          "default": true,
+          "description": "根据项目大小自动调整参数（温度、最大token数等）"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.14.0",
+    "@types/glob": "^7.1.3",
+    "@types/lru-cache": "^5.1.1",
+    "@types/mocha": "^8.2.2",
+    "@types/node": "^14.18.63",
+    "@types/vscode": "^1.60.0",
+    "@typescript-eslint/eslint-plugin": "^4.26.0",
+    "@typescript-eslint/parser": "^4.26.0",
+    "eslint": "^7.27.0",
+    "glob": "^7.1.7",
+    "mocha": "^8.4.0",
+    "ts-loader": "^9.2.2",
+    "typescript": "^4.3.2",
+    "vscode-test": "^1.5.2",
+    "webpack": "^5.38.1",
+    "webpack-cli": "^4.7.0"
+  },
+  "dependencies": {
+    "axios": "^0.24.0",
+    "lru-cache": "^6.0.0"
+  }
+}
