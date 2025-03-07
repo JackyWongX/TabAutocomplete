@@ -24,8 +24,8 @@ export class ConfigManager {
         cacheEnabled: boolean;
         retentionPeriodHours: number;
         maxSnippets: number;
-        enabledFileTypes: string[];
-        disabledFileTypes: string[];
+        enabledFileTypes: string[] | string;
+        disabledFileTypes: string[] | string;
         debugEnabled: boolean;
         logLevel: string;
         logPerformance: boolean;
@@ -34,7 +34,7 @@ export class ConfigManager {
         enabled: true,
         triggerDelay: 300,
         apiUrl: 'http://localhost:11434',
-        modelName: 'codellama:7b',
+        modelName: 'qwen2.5-coder:1.5b',
         temperature: 0.3,
         maxTokens: 300,
         maxContextLines: 100,
@@ -44,8 +44,8 @@ export class ConfigManager {
         cacheEnabled: true,
         retentionPeriodHours: 24,
         maxSnippets: 1000,
-        enabledFileTypes: ['.js', '.ts', '.py', '.java', '*'],
-        disabledFileTypes: ['.md', '.txt'],
+        enabledFileTypes: ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*'],
+        disabledFileTypes: ['.txt', '.log', '.json', '.yml', '.yaml'],
         debugEnabled: false,
         logLevel: 'info',
         logPerformance: false,
@@ -55,52 +55,60 @@ export class ConfigManager {
     private logger: Logger;
     
     constructor() {
-        this.cachedConfig = this.loadConfig();
         this.logger = Logger.getInstance();
+        // 在构造函数中加载配置
+        this.loadConfiguration();
+        this.logger.debug('ConfigManager初始化完成');
     }
     
     /**
      * 加载配置
      */
-    private loadConfig() {
-        const config = vscode.workspace.getConfiguration(this.configPrefix);
+    private loadConfiguration(): void {
+        const config = vscode.workspace.getConfiguration('ollamaCodeCompletion');
         
-        return {
-            enabled: this.getConfigValue('general.enabled', true),
-            triggerDelay: this.getConfigValue('general.triggerDelay', 300),
-            apiUrl: this.getConfigValue('model.url', 'http://localhost:11434'),
-            modelName: this.getConfigValue('model.name', 'codellama:7b'),
-            temperature: this.getConfigValue('model.temperature', 0.3),
-            maxTokens: this.getConfigValue('model.maxTokens', 300),
-            maxContextLines: this.getConfigValue('context.maxLines', 100),
-            surroundingLines: this.getConfigValue('context.surroundingLines', 5),
-            includeImports: this.getConfigValue('context.includeImports', true),
-            includeComments: this.getConfigValue('context.includeComments', true),
-            cacheEnabled: this.getConfigValue('cache.enabled', true),
-            retentionPeriodHours: this.getConfigValue('cache.retentionPeriodHours', 24),
-            maxSnippets: this.getConfigValue('cache.maxSnippets', 1000),
-            enabledFileTypes: this.getConfigValue('fileTypes.enabled', ['.js', '.ts', '.py', '.java', '*']),
-            disabledFileTypes: this.getConfigValue('fileTypes.disabled', ['.md', '.txt']),
-            debugEnabled: this.getConfigValue('debug.enabled', false),
-            logLevel: this.getConfigValue('debug.logLevel', 'info'),
-            logPerformance: this.getConfigValue('debug.logPerformance', false),
-            adaptToProjectSize: this.getConfigValue('advanced.adaptToProjectSize', true)
-        };
-    }
-    
-    /**
-     * 获取配置值
-     */
-    private getConfigValue<T>(key: string, defaultValue: T): T {
-        const config = vscode.workspace.getConfiguration(this.configPrefix);
-        return config.get<T>(key, defaultValue);
+        // 加载通用设置
+        this.cachedConfig.enabled = config.get<boolean>('general.enabled', true);
+        this.cachedConfig.triggerDelay = config.get<number>('general.triggerDelay', 300);
+        
+        // 加载API设置
+        this.cachedConfig.apiUrl = config.get<string>('model.url', 'http://localhost:11434');
+        this.cachedConfig.modelName = config.get<string>('model.name', 'qwen2.5-coder:1.5b');
+        this.cachedConfig.temperature = config.get<number>('model.temperature', 0.3);
+        this.cachedConfig.maxTokens = config.get<number>('model.maxTokens', 300);
+        
+        // 上下文设置
+        this.cachedConfig.maxContextLines = config.get<number>('context.maxLines', 100);
+        this.cachedConfig.surroundingLines = config.get<number>('context.surroundingLines', 5);
+        this.cachedConfig.includeImports = config.get<boolean>('context.includeImports', true);
+        this.cachedConfig.includeComments = config.get<boolean>('context.includeComments', true);
+        
+        // 缓存设置
+        this.cachedConfig.cacheEnabled = config.get<boolean>('cache.enabled', true);
+        this.cachedConfig.retentionPeriodHours = config.get<number>('cache.retentionPeriodHours', 24);
+        this.cachedConfig.maxSnippets = config.get<number>('cache.maxSnippets', 1000);
+        
+        // 文件类型设置
+        this.cachedConfig.enabledFileTypes = config.get<string[]>('fileTypes.enabled', ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*']);
+        this.cachedConfig.disabledFileTypes = config.get<string[]>('fileTypes.disabled', ['.txt', '.log', '.json', '.yml', '.yaml']);
+        
+        // 调试设置
+        this.cachedConfig.debugEnabled = config.get<boolean>('debug.enabled', false);
+        this.cachedConfig.logLevel = config.get<string>('debug.logLevel', 'info');
+        this.cachedConfig.logPerformance = config.get<boolean>('debug.logPerformance', false);
+        
+        this.cachedConfig.adaptToProjectSize = config.get<boolean>('advanced.adaptToProjectSize', true);
+        
+        this.logger.debug(`配置已加载: API URL=${this.cachedConfig.apiUrl}, 模型=${this.cachedConfig.modelName}, 温度=${this.cachedConfig.temperature}, 最大令牌数=${this.cachedConfig.maxTokens}`);
+        this.logger.debug(`缓存配置: 启用=${this.cachedConfig.cacheEnabled}, 保留时间=${this.cachedConfig.retentionPeriodHours}小时, 最大片段数=${this.cachedConfig.maxSnippets}`);
+        this.logger.debug(`文件类型配置: 启用=${this.cachedConfig.enabledFileTypes.join(',')}, 禁用=${this.cachedConfig.disabledFileTypes.join(',')}`);
     }
     
     /**
      * 重新加载配置
      */
     public reloadConfig(): void {
-        this.cachedConfig = this.loadConfig();
+        this.loadConfiguration();
     }
     
     /**
@@ -256,91 +264,96 @@ export class ConfigManager {
      * 获取启用的文件类型
      */
     public getEnabledFileTypes(): string[] {
-        // 将扩展名格式转换为语言ID格式
-        const enabledTypes = this.cachedConfig.enabledFileTypes;
+        const types = this.cachedConfig.enabledFileTypes;
         
-        // 如果包含'*'，表示支持所有类型
-        if (enabledTypes.includes('*')) {
-            return ['all'];
+        // 确保返回数组
+        if (Array.isArray(types)) {
+            return types;
+        } else if (typeof types === 'string') {
+            // 处理字符串情况
+            if (types.includes(',')) {
+                return types.split(',').map(t => t.trim());
+            } else {
+                return [types];
+            }
         }
         
-        // 将文件扩展名映射到语言ID
-        const extensionToLanguageMap: {[key: string]: string} = {
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.py': 'python',
-            '.java': 'java',
-            '.c': 'c',
-            '.cpp': 'cpp',
-            '.cs': 'csharp',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.php': 'php',
-            '.rb': 'ruby',
-            '.html': 'html',
-            '.css': 'css',
-            '.md': 'markdown',
-            '.h': 'c',
-            '.hpp': 'cpp',
-            '.cc': 'cpp',
-            '.cxx': 'cpp',
-            '.hxx': 'cpp'
+        // 默认返回所有类型
+        return ['*'];
+    }
+    
+    /**
+     * 给定文件扩展名是否适用于针对指定语言的规则
+     * @param fileExt 文件扩展名
+     * @param language 语言标识符
+     */
+    private isFileExtApplicableForLanguage(fileExt: string, language: string): boolean {
+        const languageExtMap: {[key: string]: string[]} = {
+            'javascript': ['.js', '.jsx'],
+            'typescript': ['.ts', '.tsx'],
+            'python': ['.py', '.pyw'],
+            'java': ['.java'],
+            'csharp': ['.cs'],
+            'cpp': ['.cpp', '.cc', '.cxx', '.h', '.hpp'],
+            'c': ['.c', '.h'],
+            'go': ['.go'],
+            'rust': ['.rs'],
+            'php': ['.php'],
+            'ruby': ['.rb'],
+            'html': ['.html', '.htm'],
+            'css': ['.css'],
+            'markdown': ['.md']
         };
         
-        // 转换扩展名到语言ID
-        const languageIds = enabledTypes.map(ext => 
-            extensionToLanguageMap[ext] || ext
-        ).filter(id => id); // 过滤掉undefined
-        
-        // 确保包含基本语言ID
-        const essentialLanguages = ['javascript', 'typescript', 'python', 'java', 'c', 'cpp'];
-        essentialLanguages.forEach(lang => {
-            if (!languageIds.includes(lang)) {
-                languageIds.push(lang);
+        return languageExtMap[language]?.includes(fileExt) || false;
+    }
+    
+    /**
+     * 根据提供的模式检查文件类型
+     * @param fileType 文件类型（扩展名或语言标识符）
+     * @param patterns 要检查的模式数组
+     */
+    private matchesFileTypePatterns(fileType: string, patterns: string[]): boolean {
+        return patterns.some(pattern => {
+            // 精确匹配
+            if (pattern === fileType) {
+                return true;
             }
+            
+            // 通配符匹配所有
+            if (pattern === '*' || pattern === 'all') {
+                return true;
+            }
+            
+            // 通配符匹配特定扩展名前缀
+            if (pattern.endsWith('*') && fileType.startsWith(pattern.slice(0, -1))) {
+                return true;
+            }
+            
+            return false;
         });
-        
-        return languageIds;
     }
     
     /**
      * 获取禁用的文件类型
      */
     public getDisabledFileTypes(): string[] {
-        // 获取禁用类型列表
-        const disabledTypes = this.cachedConfig.disabledFileTypes;
+        const types = this.cachedConfig.disabledFileTypes;
         
-        // 将文件扩展名映射到语言ID
-        const extensionToLanguageMap: {[key: string]: string} = {
-            '.md': 'markdown',
-            '.txt': 'plaintext',
-            '.json': 'json',
-            '.xml': 'xml',
-            '.log': 'log',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.py': 'python',
-            '.java': 'java',
-            '.c': 'c',
-            '.cpp': 'cpp',
-            '.h': 'c',
-            '.hpp': 'cpp',
-            '.cc': 'cpp',
-            '.cxx': 'cpp',
-            '.hxx': 'cpp',
-            '.cs': 'csharp',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.php': 'php',
-            '.rb': 'ruby',
-            '.html': 'html',
-            '.css': 'css'
-        };
+        // 确保返回数组
+        if (Array.isArray(types)) {
+            return types;
+        } else if (typeof types === 'string') {
+            // 处理字符串情况
+            if (types.includes(',')) {
+                return types.split(',').map(t => t.trim());
+            } else {
+                return [types];
+            }
+        }
         
-        // 转换扩展名到语言ID
-        return disabledTypes.map(ext => 
-            extensionToLanguageMap[ext] || ext
-        ).filter(id => id); // 过滤掉undefined
+        // 默认禁用列表
+        return ['.txt', '.log'];
     }
     
     /**

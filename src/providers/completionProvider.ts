@@ -789,19 +789,84 @@ ${contextData.prefix}
      * 检查是否有活动的预览
      */
     public hasActivePreview(): boolean {
-        return this.lastDecorator !== null && this.lastInsertText !== null && this.lastPreviewPosition !== null;
+        // 检查所有必要的预览状态
+        const hasDecorator = this.lastDecorator !== null;
+        const hasInsertText = this.lastInsertText !== null && this.lastInsertText.length > 0;
+        const hasPosition = this.lastPosition !== null;
+        const hasPreviewPosition = this.lastPreviewPosition !== null;
+        
+        // 确保编辑器中的装饰器仍然存在
+        const editor = vscode.window.activeTextEditor;
+        
+        // 所有条件都必须满足才认为有活动预览
+        return hasDecorator && hasInsertText && hasPosition && hasPreviewPosition && editor !== undefined;
     }
 
     /**
      * 清除预览
      */
     public clearPreview(): void {
-        if (this.lastDecorator) {
-            this.lastDecorator.dispose();
-            this.lastDecorator = null;
+        try {
+            // 清除并释放装饰器
+            if (this.lastDecorator) {
+                this.lastDecorator.dispose();
+                this.lastDecorator = null;
+            }
+            
+            // 清除编辑器中的所有预览装饰器
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                const emptyDecorationType = vscode.window.createTextEditorDecorationType({});
+                editor.setDecorations(emptyDecorationType, []);
+                emptyDecorationType.dispose();
+            }
+            
+            // 重置所有状态
+            this.lastInsertText = null;
+            this.lastPreviewPosition = null;
+            this.lastPosition = null;
+            
+            this.logger.debug('预览已清除');
+        } catch (error) {
+            this.logger.error('清除预览时出错', error);
         }
-        this.lastInsertText = null;
-        this.lastPreviewPosition = null;
+    }
+
+    /**
+     * 设置预览
+     */
+    public setPreview(text: string, position: vscode.Position): void {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                return;
+            }
+
+            // 清除之前的预览
+            this.clearPreview();
+
+            // 创建新的装饰器
+            const decorationType = vscode.window.createTextEditorDecorationType({
+                after: {
+                    contentText: text,
+                    color: '#888888'
+                }
+            });
+
+            // 应用装饰器
+            editor.setDecorations(decorationType, [new vscode.Range(position, position)]);
+
+            // 保存状态
+            this.lastDecorator = decorationType;
+            this.lastInsertText = text;
+            this.lastPosition = position;
+            this.lastPreviewPosition = position;
+            
+            this.logger.debug('预览已设置');
+        } catch (error) {
+            this.logger.error('设置预览时出错', error);
+            this.clearPreview();
+        }
     }
 
     /**

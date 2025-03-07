@@ -497,4 +497,90 @@ export class CacheManager {
             languageStats
         };
     }
+
+    /**
+     * 获取缓存的补全内容
+     * @param prefix 前缀文本
+     * @returns 缓存的补全内容，如果没有找到则返回undefined
+     */
+    public async get(prefix: string): Promise<string | undefined> {
+        if (!this.configManager.isCacheEnabled()) {
+            return undefined;
+        }
+
+        this.logger.debug(`尝试从缓存中获取补全内容，前缀长度: ${prefix.length}`);
+        
+        // 使用前缀的哈希作为键
+        const key = this.hashString(prefix);
+        
+        // 从LRU缓存中获取
+        const cachedSnippet = this.lruCache.get(key);
+        
+        if (cachedSnippet) {
+            this.logger.debug(`缓存命中，返回缓存的补全内容`);
+            return cachedSnippet.code;
+        }
+        
+        this.logger.debug(`缓存未命中`);
+        return undefined;
+    }
+
+    /**
+     * 将补全内容存储到缓存中
+     * @param prefix 前缀文本
+     * @param completion 补全内容
+     */
+    public async put(prefix: string, completion: string): Promise<void> {
+        if (!this.configManager.isCacheEnabled() || !completion || completion.trim().length === 0) {
+            return;
+        }
+
+        this.logger.debug(`将补全内容存储到缓存中，前缀长度: ${prefix.length}, 补全长度: ${completion.length}`);
+        
+        // 使用前缀的哈希作为键
+        const key = this.hashString(prefix);
+        
+        // 创建代码片段对象
+        const snippet: CodeSnippet = {
+            id: key,
+            code: completion,
+            language: 'unknown', // 这里可以传入实际的语言
+            timestamp: Date.now(),
+            context: prefix.slice(-200), // 存储前缀的最后200个字符作为上下文
+            filePath: '',
+            metadata: {
+                tags: [],
+                frequency: 1
+            }
+        };
+        
+        // 添加到LRU缓存
+        this.lruCache.set(key, snippet);
+        
+        // 添加到代码片段列表
+        const existingIndex = this.codeSnippets.findIndex(s => s.id === key);
+        if (existingIndex >= 0) {
+            this.codeSnippets[existingIndex] = snippet;
+        } else {
+            this.codeSnippets.push(snippet);
+        }
+        
+        // 保存缓存
+        this.saveCache();
+    }
+
+    /**
+     * 计算字符串的哈希值
+     * @param str 要哈希的字符串
+     * @returns 哈希字符串
+     */
+    private hashString(str: string): string {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return `hash_${Math.abs(hash).toString(16)}`;
+    }
 } 

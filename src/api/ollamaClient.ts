@@ -745,4 +745,200 @@ export class OllamaClient {
         
         return content;
     }
+
+    /**
+     * 生成代码补全
+     * @param prompt 提示词
+     * @param options 选项
+     * @param signal 中止信号
+     * @returns 补全结果文本
+     */
+    public async generateCompletion(
+        prompt: string, 
+        options: { temperature?: number; maxTokens?: number; model?: string }, 
+        signal?: AbortSignal
+    ): Promise<string | null> {
+        try {
+            const apiUrl = this.configManager.getApiUrl();
+            const modelName = options.model || this.configManager.getModelName();
+            const temperature = options.temperature !== undefined ? options.temperature : this.configManager.getTemperature();
+            const maxTokens = options.maxTokens || this.configManager.getMaxTokens();
+            
+            this.logger.debug(`生成补全: API URL=${apiUrl}, 模型=${modelName}, 温度=${temperature}, 最大令牌数=${maxTokens}`);
+            
+            // 记录提示词（仅在调试模式下记录完整提示词）
+            if (this.configManager.isDebugEnabled()) {
+                this.logger.debug(`完整提示词:\n${prompt}`);
+            } else {
+                // 仅记录提示词的前100个字符
+                this.logger.debug(`提示词前100个字符: ${prompt.substring(0, 100)}...`);
+            }
+            
+            // 构建请求数据
+            const requestData = {
+                model: modelName,
+                prompt: prompt,
+                temperature: temperature,
+                max_tokens: maxTokens,
+                options: {
+                    num_predict: maxTokens
+                }
+            };
+            
+            // 请求信息日志
+            this.logger.debug(`发送请求到Ollama API: ${apiUrl}/api/generate`);
+            this.logger.debug(`请求体大小: ${JSON.stringify(requestData).length} 字符`);
+            
+            // 创建请求选项
+            const fetchOptions: RequestInit = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestData),
+                signal: signal
+            };
+            
+            // 发送请求
+            this.logger.debug('开始发送fetch请求...');
+            const response = await fetch(`${apiUrl}/api/generate`, fetchOptions);
+            
+            // 检查是否被中止
+            if (signal?.aborted) {
+                this.logger.debug('请求被中止');
+                return null;
+            }
+            
+            // 记录响应状态
+            this.logger.debug(`Ollama API响应状态: ${response.status} ${response.statusText}`);
+            
+            // 检查响应状态
+            if (!response.ok) {
+                const errorText = await response.text();
+                this.logger.error(`API请求失败: ${response.status} ${response.statusText} - ${errorText}`);
+                throw new Error(`API请求失败: ${response.status} ${response.statusText} - ${errorText}`);
+            }
+            
+            // 获取响应文本
+            const responseText = await response.text();
+            this.logger.debug(`获取到响应文本，长度: ${responseText.length}`);
+            
+            // 处理流式JSON响应
+            let completionText = '';
+            
+            // 拆分响应并收集所有的response字段内容
+            if (responseText.includes('"response"')) {
+                try {
+                    this.logger.debug('检测到response字段，解析流式JSON响应');
+                    // 按行拆分响应
+                    const lines = responseText.split('\n').filter(line => line.trim() !== '');
+                    this.logger.debug(`响应行数: ${lines.length}`);
+                    
+                    // 从每行提取response字段内容并合并
+                    let processedLines = 0;
+                    for (const line of lines) {
+                        try {
+                            const jsonObj = JSON.parse(line);
+                            if (jsonObj && jsonObj.response) {
+                                completionText += jsonObj.response;
+                                processedLines++;
+                            }
+                        } catch (parseError) {
+                            this.logger.debug(`解析响应行时出错: ${parseError.message}`);
+                        }
+                    }
+                    
+                    this.logger.debug(`成功处理的响应行: ${processedLines}/${lines.length}`);
+                    this.logger.debug(`从流式响应中提取的完整内容长度: ${completionText.length}`);
+                } catch (error) {
+                    this.logger.error(`处理流式响应时出错: ${error.message}`);
+                    completionText = '';
+                }
+            } else {
+                this.logger.debug('未检测到response字段，尝试其他方法解析响应');
+            }
+            
+            // 如果流式处理失败，尝试使用正则表达式提取所有响应
+            if (!completionText || completionText.trim().length === 0) {
+                this.logger.debug(`尝试使用正则表达式提取所有响应`);
+                try {
+                    // 提取所有response值
+                    let allResponses = '';
+                    const regex = /"response":[ ]*"([^"]*)"/g;
+                    let match;
+                    let matchCount = 0;
+                    
+                    while ((match = regex.exec(responseText)) !== null) {
+                        if (match[1]) {
+                            // 处理转义字符
+                            const responseValue = match[1].replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\"/g, '"');
+                            allResponses += responseValue;
+                            matchCount++;
+                        }
+                    }
+                    
+                    if (allResponses.length > 0) {
+                        this.logger.debug(`正则提取成功，找到${matchCount}个匹配，提取长度: ${allResponses.length}`);
+                        completionText = allResponses;
+                    } else {
+                        this.logger.debug('正则表达式没有找到匹配');
+                    }
+                } catch (error) {
+                    this.logger.debug(`正则提取失败: ${error.message}`);
+                }
+            }
+            
+            // 如果提取内容还是为空，尝试直接从响应文本中提取
+            if (!completionText || completionText.trim().length === 0) {
+                // 尝试直接提取
+                this.logger.debug('尝试直接从响应文本中提取内容');
+                const directExtract = this.extractCompletionDirectly(responseText);
+                if (directExtract) {
+                    completionText = directExtract;
+                    this.logger.debug(`直接提取成功，提取长度: ${completionText.length}`);
+                } else {
+                    this.logger.debug('直接提取失败');
+                }
+            }
+            
+            // 去除Markdown代码块标记
+            if (completionText.startsWith('```')) {
+                const firstLineBreak = completionText.indexOf('\n');
+                if (firstLineBreak !== -1) {
+                    // 移除开头的```python或```等标记
+                    completionText = completionText.substring(firstLineBreak + 1);
+                } else {
+                    completionText = '';
+                }
+                
+                // 移除结尾的```
+                const lastCodeBlockEnd = completionText.lastIndexOf('```');
+                if (lastCodeBlockEnd !== -1) {
+                    completionText = completionText.substring(0, lastCodeBlockEnd).trim();
+                }
+                this.logger.debug('已移除Markdown代码块标记');
+            }
+            
+            // 记录最终的补全结果
+            if (completionText) {
+                this.logger.debug(`最终补全结果长度: ${completionText.length}`);
+                if (this.configManager.isDebugEnabled()) {
+                    this.logger.debug(`最终补全结果前200字符: ${completionText.substring(0, 200)}${completionText.length > 200 ? '...' : ''}`);
+                }
+            } else {
+                this.logger.debug(`没有有效的补全结果`);
+            }
+            
+            return completionText;
+        } catch (error) {
+            // 检查是否被中止
+            if (signal?.aborted) {
+                this.logger.debug('请求被中止');
+                return null;
+            }
+            
+            this.logger.error(`生成补全时出错: ${error.message}`, error);
+            throw error;
+        }
+    }
 }

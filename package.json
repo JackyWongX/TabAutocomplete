@@ -54,6 +54,14 @@
       {
         "command": "ollamaCompletion.applyCompletionForCompletionItem",
         "title": "应用补全项内容"
+      },
+      {
+        "command": "ollamaCompletion.acceptTabCompletion",
+        "title": "接受Tab补全"
+      },
+      {
+        "command": "ollamaCompletion.handleEscape",
+        "title": "处理ESC键"
       }
     ],
     "keybindings": [
@@ -61,6 +69,16 @@
         "command": "ollamaCompletion.applyCompletion",
         "key": "alt+\\",
         "when": "editorTextFocus && !suggestWidgetVisible"
+      },
+      {
+        "command": "ollamaCompletion.acceptTabCompletion",
+        "key": "tab",
+        "when": "editorTextFocus && !editorReadonly && !inlineSuggestionVisible && !suggestWidgetVisible"
+      },
+      {
+        "command": "ollamaCompletion.handleEscape",
+        "key": "escape",
+        "when": "editorTextFocus"
       }
     ],
     "configuration": {
@@ -157,7 +175,13 @@
         },
         "ollamaCodeCompletion.debug.logLevel": {
           "type": "string",
-          "enum": ["debug", "info", "warn", "error", "none"],
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error",
+            "none"
+          ],
           "default": "info",
           "description": "日志级别 (debug, info, warn, error, none)"
         },
@@ -204,7 +228,9 @@
     "webpack-cli": "^4.7.0"
   },
   "dependencies": {
+    "@types/uuid": "^10.0.0",
     "axios": "^0.24.0",
-    "lru-cache": "^6.0.0"
+    "lru-cache": "^6.0.0",
+    "uuid": "^11.1.0"
   }
 }
