@@ -105,51 +105,180 @@ export async function activate(context: vscode.ExtensionContext) {
             context.subscriptions.push(provider);
             logger.debug(`已为语言 ${language} 注册补全提供程序`);
         }
+
+        // 监听编辑器内容变化事件，实现内联预览功能
+        const typingListener = vscode.workspace.onDidChangeTextDocument(async (event) => {
+            if (!configManager.isEnabled()) {
+                return;
+            }
+
+            // 忽略非文件编辑器的变化
+            if (event.document.uri.scheme !== 'file') {
+                return;
+            }
+
+            // 获取活动编辑器
+            const editor = vscode.window.activeTextEditor;
+            if (!editor || editor.document !== event.document) {
+                return;
+            }
+
+            // 延迟300毫秒，避免频繁触发
+            const delay = configManager.getTriggerDelay();
+            await new Promise(resolve => setTimeout(resolve, delay));
+
+            // 如果文档已经变化，则不处理
+            if (editor.document.version !== event.document.version) {
+                return;
+            }
+
+            try {
+                // 获取当前光标位置
+                const position = editor.selection.active;
+                
+                // 检查文件类型是否支持
+                if (!completionProvider.isFileTypeSupported(editor.document)) {
+                    return;
+                }
+
+                // 使用提供者生成补全项
+                const completionItems = await completionProvider.provideCompletionItems(
+                    editor.document, 
+                    position, 
+                    new vscode.CancellationTokenSource().token, 
+                    { triggerKind: vscode.CompletionTriggerKind.Invoke, triggerCharacter: '' }
+                );
+
+                // 如果有补全项，则显示第一个
+                if (completionItems) {
+                    let items: vscode.CompletionItem[] = [];
+                    if (Array.isArray(completionItems)) {
+                        items = completionItems;
+                    } else {
+                        items = completionItems.items;
+                    }
+
+                    if (items.length > 0) {
+                        const item = items[0];
+                        const insertText = typeof item.insertText === 'string' ? 
+                            item.insertText : item.insertText?.value || '';
+                        
+                        // 创建装饰器
+                        const decorator = vscode.window.createTextEditorDecorationType({
+                            after: {
+                                contentText: insertText,
+                                color: '#888888'
+                            }
+                        });
+
+                        // 应用装饰器
+                        editor.setDecorations(decorator, [new vscode.Range(position, position)]);
+
+                        // 保存状态，以便后续接受补全
+                        completionProvider.setLastDecorator(decorator);
+                        completionProvider.setLastInsertText(insertText);
+                        completionProvider.setLastPosition(position);
+                    }
+                }
+            } catch (error) {
+                logger.error('处理编辑器变化时出错', error);
+            }
+        });
+        context.subscriptions.push(typingListener);
+
+        // 注册Tab键监听，用于接受补全
+        const tabHandler = vscode.commands.registerTextEditorCommand(
+            'ollamaCompletion.acceptCompletion',
+            async (editor) => {
+                try {
+                    // 如果有活动的预览，则应用它
+                    if (completionProvider.hasActivePreview()) {
+                        const insertText = completionProvider.getLastInsertText();
+                        const position = completionProvider.getLastPosition();
+                        
+                        if (insertText && position) {
+                            // 应用补全
+                            const success = await editor.edit(editBuilder => {
+                                editBuilder.insert(position, insertText);
+                            });
+                            
+                            if (success) {
+                                // 清除预览
+                                completionProvider.clearPreview();
+                            } else {
+                                logger.error('应用补全失败');
+                            }
+                        }
+                    }
+                } catch (error) {
+                    logger.error('执行acceptCompletion命令时出错', error);
+                    // 确保在出错时也清理预览状态
+                    completionProvider.clearPreview();
+                }
+            }
+        );
+        context.subscriptions.push(tabHandler);
         
         // 注册自动补全命令 - 修改为直接应用补全
         const applyCompletionCommand = vscode.commands.registerTextEditorCommand(
             'ollamaCompletion.applyCompletion',
-            (textEditor: vscode.TextEditor) => {
-                // 当用户手动触发时，直接应用补全
-                if (textEditor) {
-                    const position = textEditor.selection.active;
-                    const document = textEditor.document;
-                    completionProvider.applyCompletionAtPosition(document, position);
+            async (textEditor: vscode.TextEditor) => {
+                // 当用户手动触发时，接受当前显示的补全
+                if (textEditor && completionProvider.lastShownCompletion) {
+                    await completionProvider.accept(completionProvider.lastShownCompletion.completionId);
                 }
             }
         );
         context.subscriptions.push(applyCompletionCommand);
         
-        // 注册补全项应用命令
-        const applyCompletionItemCommand = vscode.commands.registerCommand(
-            'ollamaCompletion.applyCompletionForCompletionItem',
-            (document: vscode.TextDocument, position: vscode.Position, text: string) => {
-                if (document && position && text) {
-                    const editor = vscode.window.activeTextEditor;
-                    if (editor && editor.document.uri.toString() === document.uri.toString()) {
-                        // 直接应用补全内容
-                        logger.debug(`应用补全命令被调用，文本长度=${text.length}，即将调用applyCompletion方法`);
-                        
-                        // 确保编辑器是激活的
-                        vscode.window.showTextDocument(document).then(activeEditor => {
-                            // 使用公共方法访问私有方法applyCompletion
-                            completionProvider['applyCompletion'](activeEditor, position, text);
-                            logger.debug('完成应用补全命令');
-                        });
-                    } else {
-                        logger.debug('找不到匹配的编辑器来应用补全或编辑器不活跃');
-                        // 尝试强制打开文档
-                        vscode.window.showTextDocument(document).then(activeEditor => {
-                            completionProvider['applyCompletion'](activeEditor, position, text);
-                            logger.debug('在强制激活编辑器后应用补全');
-                        });
-                    }
-                } else {
-                    logger.debug(`缺少应用补全所需参数: document=${!!document}, position=${!!position}, text=${!!text}`);
+        // 注册记录补全结果的命令
+        const logCompletionOutcomeCommand = vscode.commands.registerCommand(
+            'ollamaCompletion.logCompletionOutcome',
+            async (completionId: string, provider: CompletionProvider) => {
+                if (completionId && provider) {
+                    await provider.accept(completionId);
                 }
             }
         );
-        context.subscriptions.push(applyCompletionItemCommand);
+        context.subscriptions.push(logCompletionOutcomeCommand);
+        
+        // 配置键盘快捷键
+        context.subscriptions.push(
+            vscode.commands.registerCommand('editor.action.tab', async () => {
+                const editor = vscode.window.activeTextEditor;
+                if (editor && completionProvider.hasActivePreview()) {
+                    // 如果有活动的预览，执行接受补全的命令
+                    await vscode.commands.executeCommand('ollamaCompletion.acceptCompletion');
+                    return vscode.commands.executeCommand('');
+                }
+                // 如果没有活动的预览，执行默认的Tab行为
+                return vscode.commands.executeCommand('tab');
+            })
+        );
+
+        // 注册键盘事件处理
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeTextDocument(async (e) => {
+                const editor = vscode.window.activeTextEditor;
+                if (editor && e.document === editor.document) {
+                    // 检查是否是Tab键输入
+                    const changes = e.contentChanges;
+                    if (changes.length === 1 && changes[0].text === '\t') {
+                        if (completionProvider.hasActivePreview()) {
+                            // 撤销Tab字符插入
+                            await editor.edit(editBuilder => {
+                                editBuilder.delete(new vscode.Range(
+                                    changes[0].range.start,
+                                    changes[0].range.end
+                                ));
+                            });
+                            // 应用补全
+                            await vscode.commands.executeCommand('ollamaCompletion.acceptCompletion');
+                        }
+                    }
+                }
+            })
+        );
         
         // 监听文档变化事件
         const documentChangeDisposable = vscode.workspace.onDidChangeTextDocument(event => {

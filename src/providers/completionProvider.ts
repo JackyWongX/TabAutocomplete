@@ -3,6 +3,7 @@ import { OllamaClient } from '../api/ollamaClient';
 import { ConfigManager } from '../config/configManager';
 import { CacheManager } from '../cache/cacheManager';
 import { Logger } from '../utils/logger';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * 代码补全提供程序
@@ -21,6 +22,14 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
     private lastCompletionResult: string | null = null;
     private lastContext: string = '';
     private lastPosition: vscode.Position | null = null;
+    private errorsShown: Set<string> = new Set();
+    private abortControllers: Map<string, AbortController> = new Map();
+    public lastShownCompletion: any = undefined;
+    
+    // 预览相关属性
+    private lastDecorator: vscode.TextEditorDecorationType | null = null;
+    private lastInsertText: string | null = null;
+    private lastPreviewPosition: vscode.Position | null = null;
 
     /**
      * 构造函数
@@ -44,17 +53,150 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
     }
 
     /**
+     * 处理错误
+     */
+    private onError(e: any) {
+        // 忽略一些常见的预期错误
+        const ERRORS_TO_IGNORE = [
+            "unexpected server status",
+            "operation was aborted",
+        ];
+
+        if (ERRORS_TO_IGNORE.some((err) => 
+            typeof e === "string" ? e.includes(err) : e?.message?.includes(err))) {
+            return;
+        }
+
+        this.logger.error('生成代码补全时出错', e);
+        
+        if (!this.errorsShown.has(e.message)) {
+            this.errorsShown.add(e.message);
+            
+            let options = ["文档"];
+            if (e.message.includes("Ollama可能未安装")) {
+                options.push("下载Ollama");
+            } else if (e.message.includes("Ollama可能未运行")) {
+                options = ["启动Ollama"];
+            }
+            
+            vscode.window.showErrorMessage(e.message, ...options).then((val) => {
+                if (val === "文档") {
+                    vscode.env.openExternal(vscode.Uri.parse("https://github.com/ollama/ollama"));
+                } else if (val === "下载Ollama") {
+                    vscode.env.openExternal(vscode.Uri.parse("https://ollama.ai/download"));
+                } else if (val === "启动Ollama") {
+                    // 启动Ollama的逻辑
+                    this.startOllama();
+                }
+            });
+        }
+    }
+
+    /**
+     * 启动Ollama服务
+     */
+    private async startOllama() {
+        // 根据平台选择不同的启动命令
+        let command = '';
+        if (process.platform === 'win32') {
+            command = 'start ollama serve';
+        } else if (process.platform === 'darwin') {
+            command = 'open -a Ollama';
+        } else {
+            command = 'ollama serve';
+        }
+
+        try {
+            // 使用VS Code的终端执行命令
+            const terminal = vscode.window.createTerminal('Ollama');
+            terminal.sendText(command);
+            terminal.show();
+            
+            this.logger.info('已尝试启动Ollama服务');
+            vscode.window.showInformationMessage('正在尝试启动Ollama服务，请稍候...');
+            
+            // 等待几秒钟后测试连接
+            setTimeout(async () => {
+                const result = await this.client.testConnection();
+                if (result.success) {
+                    vscode.window.showInformationMessage('Ollama服务已成功启动！');
+                } else {
+                    vscode.window.showErrorMessage('Ollama服务启动失败，请手动启动Ollama。');
+                }
+            }, 5000);
+        } catch (error) {
+            this.logger.error('启动Ollama服务失败', error);
+            vscode.window.showErrorMessage('启动Ollama服务失败，请手动启动Ollama。');
+        }
+    }
+
+    /**
+     * 取消当前的补全请求
+     */
+    public cancel() {
+        this.abortControllers.forEach((controller) => {
+            controller.abort();
+        });
+        this.abortControllers.clear();
+    }
+
+    /**
+     * 创建中止控制器
+     */
+    private createAbortController(completionId: string): AbortController {
+        const controller = new AbortController();
+        this.abortControllers.set(completionId, controller);
+        return controller;
+    }
+
+    /**
+     * 删除中止控制器
+     */
+    private deleteAbortController(completionId: string) {
+        this.abortControllers.delete(completionId);
+    }
+
+    /**
+     * 接受补全
+     */
+    public async accept(completionId: string): Promise<void> {
+        this.logger.debug(`接受补全: ${completionId}`);
+        // 可以在这里添加接受补全的统计或其他逻辑
+        
+        // 如果有活动编辑器，应用补全
+        if (this.lastShownCompletion && this.lastShownCompletion.completion) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                const document = editor.document;
+                const position = editor.selection.active;
+                
+                // 应用补全
+                await this.applyCompletion(editor, position, this.lastShownCompletion.completion);
+            }
+        }
+    }
+
+    /**
+     * 标记补全已显示
+     */
+    public markDisplayed(completionId: string, outcome: any) {
+        this.logger.debug(`标记补全已显示: ${completionId}`);
+        // 记录outcome相关信息
+        if (outcome) {
+            this.logger.debug(`补全长度: ${outcome.completion?.length || 0}, 是否来自缓存: ${outcome.cacheHit || false}`);
+        }
+    }
+
+    /**
      * 应用补全内容到编辑器
      */
-    public applyCompletion(editor: vscode.TextEditor, position: vscode.Position, text: string): void {
+    public async applyCompletion(editor: vscode.TextEditor, position: vscode.Position, text: string): Promise<void> {
         try {
             if (!text || text.trim().length === 0) {
                 this.logger.debug('补全内容为空，不应用');
                 return;
             }
 
-            const document = editor.document;
-            
             // 处理补全内容
             let processedText = text;
             
@@ -71,523 +213,54 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                 processedText = processedText.substring(0, processedText.length - 3);
             }
             
-            // 获取当前行文本
-            const lineText = document.lineAt(position.line).text;
-            const textBeforeCursor = lineText.substring(0, position.character);
-            
-            // 如果补全文本包含当前行的文本，移除这部分
-            if (processedText.startsWith(textBeforeCursor)) {
-                processedText = processedText.substring(textBeforeCursor.length);
-            }
-            
-            // 检测并移除文档中已存在的重复内容
-            processedText = this.removeDuplicateContent(document, processedText);
-            
-            // 记录应用内容
-            this.logger.debug(`应用补全内容，长度: ${processedText.length} 字符`);
-            
-            // 如果去重后内容为空，则不应用
-            if (processedText.trim().length === 0) {
-                this.logger.debug('去重后补全内容为空，不应用');
-                return;
-            }
-            
             // 编辑文档插入补全内容
-            editor.edit(editBuilder => {
+            const success = await editor.edit(editBuilder => {
                 editBuilder.insert(position, processedText);
-            }).then(success => {
-                if (success) {
-                    // 应用成功，将光标移动到插入的文本末尾
-                    const insertedLines = processedText.split('\n');
-                    const lastLineLength = insertedLines[insertedLines.length - 1].length;
-                    
-                    let newPosition;
-                    if (insertedLines.length > 1) {
-                        // 插入了多行文本
-                        newPosition = new vscode.Position(
-                            position.line + insertedLines.length - 1,
-                            insertedLines.length > 1 ? lastLineLength : position.character + lastLineLength
-                        );
-                    } else {
-                        // 插入了单行文本
-                        newPosition = new vscode.Position(position.line, position.character + processedText.length);
-                    }
-                    
-                    // 设置新的光标位置
-                    editor.selection = new vscode.Selection(newPosition, newPosition);
-                    
-                    // 确保编辑器视图能看到新的光标位置
-                    editor.revealRange(new vscode.Range(newPosition, newPosition));
-                    
-                    // 更新最后位置
-                    this.lastPosition = newPosition;
-                } else {
-                    this.logger.debug('应用补全内容失败，编辑操作返回false');
-                }
-            }).then(undefined, error => {
-                this.logger.error(`应用编辑时出错: ${error instanceof Error ? error.message : '未知错误'}`);
             });
-        }
-        catch (error) {
-            this.logger.error('应用补全时出错', error);
-        }
-    }
 
-    /**
-     * 检查一行是否为注释行
-     * @param line 要检查的行
-     * @param language 语言ID
-     * @returns 是否为注释行
-     */
-    private isCommentLine(line: string, language: string = ''): boolean {
-        const trimmedLine = line.trim();
-        
-        // 通用注释标记识别
-        if (trimmedLine.startsWith('//') ||     // C风格语言
-            trimmedLine.startsWith('/*') ||     // C风格语言
-            trimmedLine.startsWith('*') ||      // C风格语言多行注释中间行
-            trimmedLine.startsWith('#') ||      // Python, Shell, Ruby等
-            trimmedLine.startsWith('--') ||     // SQL, Haskell等
-            trimmedLine.startsWith('<!--') ||   // HTML, XML
-            trimmedLine.startsWith('"""') ||    // Python文档字符串
-            trimmedLine.startsWith("'''") ||    // Python文档字符串
-            trimmedLine.startsWith('%') ||      // MATLAB, LaTeX
-            trimmedLine.startsWith(';') ||      // Lisp, Assembly
-            trimmedLine.startsWith("REM ") ||   // Batch文件
-            trimmedLine === "=begin" ||         // Ruby多行注释开始
-            trimmedLine === "=end") {           // Ruby多行注释结束
-            return true;
-        }
-        
-        // 特定语言的注释识别
-        if (language) {
-            switch (language.toLowerCase()) {
-                case 'html':
-                case 'xml':
-                case 'svg':
-                    return trimmedLine.includes('<!--');
-                case 'vb':
-                case 'vba':
-                    return trimmedLine.startsWith("'") || trimmedLine.startsWith("REM");
-                // 其他特殊语言可以在这里添加
-            }
-        }
-        
-        return false;
-    }
-    
-    /**
-     * 检测并移除文档中已存在的重复内容
-     * @param document 当前文档
-     * @param completionText 补全内容
-     * @returns 去除重复后的补全内容
-     */
-    private removeDuplicateContent(document: vscode.TextDocument, completionText: string): string {
-        try {
-            this.logger.debug('开始检测重复内容...');
-            
-            // 获取文档全文和补全内容
-            const documentText = document.getText();
-            const docLines = documentText.split('\n');
-            const compLines = completionText.split('\n');
-            const language = document.languageId;
-            
-            // 检查补全内容是否完全包含在文档中，但要排除注释中出现的情况
-            if (documentText.includes(completionText)) {
-                // 查找补全内容在文档中的位置
-                const contentPos = documentText.indexOf(completionText);
+            if (success) {
+                // 应用成功，将光标移动到插入的文本末尾
+                const insertedLines = processedText.split('\n');
+                const lastLineLength = insertedLines[insertedLines.length - 1].length;
                 
-                // 检查这个位置是否在注释中
-                // 在这一行前面是否有注释标记
-                const lineStartPos = documentText.lastIndexOf('\n', contentPos) + 1;
-                const lineEndPos = documentText.indexOf('\n', contentPos);
-                const line = documentText.substring(lineStartPos, lineEndPos > -1 ? lineEndPos : documentText.length);
-                
-                // 如果这一行包含注释标记，不认为是重复
-                if (this.isCommentLine(line, language)) {
-                    this.logger.debug('补全内容在文档的注释中找到，不视为重复');
+                let newPosition;
+                if (insertedLines.length > 1) {
+                    // 插入了多行文本
+                    newPosition = new vscode.Position(
+                        position.line + insertedLines.length - 1,
+                        insertedLines.length > 1 ? lastLineLength : position.character + lastLineLength
+                    );
                 } else {
-                    this.logger.debug('补全内容完全包含在文档中，不应用');
-                    return '';
-                }
-            }
-            
-            // 首先，检测补全内容是否与文档开头有重叠（例如重复的import语句）
-            // 这种情况通常是因为模型会重新生成整个文件的开头部分
-            let skipLinesCount = 0;
-            for (let i = 0; i < Math.min(compLines.length, docLines.length); i++) {
-                const compLine = compLines[i].trim();
-                const docLine = docLines[i].trim();
-                
-                // 跳过空行和注释行的比较
-                if (compLine === '' || this.isCommentLine(compLine, language) || 
-                    docLine === '' || this.isCommentLine(docLine, language)) {
-                    continue;
+                    // 插入了单行文本
+                    newPosition = new vscode.Position(position.line, position.character + processedText.length);
                 }
                 
-                if (compLine === docLine) {
-                    skipLinesCount = i + 1;
-                } else {
-                    break;
-                }
-            }
-            
-            // 如果前面部分有重复，从重复部分之后开始取补全内容
-            let filteredCompLines = skipLinesCount > 0 
-                ? compLines.slice(skipLinesCount) 
-                : [...compLines];
-            
-            // 去除所有空行
-            filteredCompLines = filteredCompLines.filter(line => line.trim() !== '');
-            
-            // 检测并移除与文档末尾重复的部分
-            let skipEndLinesCount = 0;
-            for (let i = 0; i < Math.min(filteredCompLines.length, docLines.length); i++) {
-                const compLine = filteredCompLines[filteredCompLines.length - 1 - i].trim();
-                const docLine = docLines[docLines.length - 1 - i].trim();
+                // 设置新的光标位置
+                editor.selection = new vscode.Selection(newPosition, newPosition);
                 
-                // 跳过空行和注释行的比较
-                if (compLine === '' || this.isCommentLine(compLine, language) || 
-                    docLine === '' || this.isCommentLine(docLine, language)) {
-                    continue;
-                }
+                // 确保编辑器视图能看到新的光标位置
+                editor.revealRange(new vscode.Range(newPosition, newPosition));
                 
-                if (compLine === docLine) {
-                    skipEndLinesCount = i + 1;
-                } else {
-                    break;
-                }
+                // 更新最后位置
+                this.lastPosition = newPosition;
+            } else {
+                this.logger.debug('应用补全内容失败，编辑操作返回false');
             }
-            
-            if (skipEndLinesCount > 0) {
-                filteredCompLines = filteredCompLines.slice(0, filteredCompLines.length - skipEndLinesCount);
-            }
-            
-            // 特别处理：识别补全内容中的函数定义，与文档中的函数进行比较
-            const docFunctions = this.extractFunctions(docLines);
-            const compFunctions = this.extractFunctions(filteredCompLines);
-            
-            // 处理重复函数
-            const finalCompLines: string[] = [];
-            let inFunction = false;
-            let currentFunctionName = '';
-            
-            for (let i = 0; i < filteredCompLines.length; i++) {
-                const line = filteredCompLines[i];
-                const trimmedLine = line.trim();
-                
-                // 检测函数开始
-                if (trimmedLine.startsWith('def ') || 
-                    trimmedLine.match(/^(int|void|char|double|float|bool|string|auto|std::string)\s+\w+\s*\(/)) {
-                    const funcNameMatch = trimmedLine.match(/def\s+([a-zA-Z0-9_]+)\s*\(/) || 
-                                         trimmedLine.match(/\w+\s+([a-zA-Z0-9_]+)\s*\(/);
-                    if (funcNameMatch) {
-                        currentFunctionName = funcNameMatch[1];
-                        inFunction = true;
-                        
-                        // 检查文档中是否已有相同名称的函数
-                        const existingFunc = docFunctions.find(f => f.name === currentFunctionName);
-                        if (existingFunc) {
-                            // 找到补全中的整个函数定义
-                            const compFunc = compFunctions.find(f => f.name === currentFunctionName);
-                            if (compFunc) {
-                                // 比较函数签名（参数列表）
-                                const docFuncFirstLine = docLines[existingFunc.start].trim();
-                                const compFuncFirstLine = filteredCompLines[compFunc.start - (skipLinesCount > 0 ? skipLinesCount : 0)].trim();
-                                
-                                if (docFuncFirstLine === compFuncFirstLine) {
-                                    // 完全相同的函数，跳过整个函数
-                                    i = compFunc.end - (skipLinesCount > 0 ? skipLinesCount : 0);
-                                    inFunction = false;
-                                    continue;
-                                } else {
-                                    // 函数名相同但签名不同（可能是更新版本）
-                                    // 在这种情况下，我们跳过文档中的旧函数版本，使用补全中的新版本
-                                    // 但是不在这里添加，而是在最终处理中处理替换
-                                    this.logger.debug(`发现更新版本的函数: ${currentFunctionName}`);
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 检测函数结束
-                if (inFunction && (i === filteredCompLines.length - 1 || 
-                    (filteredCompLines[i+1].trim().length === 0 && 
-                     (i+2 >= filteredCompLines.length || !filteredCompLines[i+2].startsWith(' '))))) {
-                    inFunction = false;
-                }
-                
-                // 如果不是函数内部，检查行是否与文档中已有内容重复
-                if (!inFunction) {
-                    if (trimmedLine.length === 0) continue; // 跳过空行
-                    
-                    // 检查这一行是否与文档中的某行完全相同，但排除注释中的匹配
-                    const isDuplicate = docLines.some(docLine => {
-                        const trimmedDocLine = docLine.trim();
-                        // 如果是注释行，不视为重复
-                        if (this.isCommentLine(trimmedDocLine, language)) {
-                            return false;
-                        }
-                        return trimmedDocLine === trimmedLine;
-                    });
-                    
-                    if (!isDuplicate) {
-                        finalCompLines.push(line);
-                    }
-                } else {
-                    // 在函数内部，我们保留所有行
-                    finalCompLines.push(line);
-                }
-            }
-            
-            // 特别处理main代码块
-            const mainBlockStart = finalCompLines.findIndex(line => 
-                line.trim().startsWith('if __name__ == "__main__"') || 
-                line.trim().startsWith('int main(')
-            );
-            
-            if (mainBlockStart !== -1) {
-                // 检查文档中是否已有main代码块
-                const docMainStart = docLines.findIndex(line => 
-                    line.trim().startsWith('if __name__ == "__main__"') || 
-                    line.trim().startsWith('int main(')
-                );
-                
-                if (docMainStart !== -1) {
-                    // 找到main块的结束
-                    let mainBlockEnd = finalCompLines.length - 1;
-                    for (let i = mainBlockStart + 1; i < finalCompLines.length; i++) {
-                        const line = finalCompLines[i];
-                        if (line.trim() === '}') {
-                            mainBlockEnd = i;
-                            break;
-                        }
-                    }
-                    
-                    // 从补全内容中移除main块
-                    finalCompLines.splice(mainBlockStart, mainBlockEnd - mainBlockStart + 1);
-                    
-                    this.logger.debug(`移除了重复的main代码块，从行${mainBlockStart}到${mainBlockEnd}`);
-                }
-            }
-            
-            // 额外的重复内容检测
-            // 这会检测连续的多行重复
-            for (let i = 0; i < finalCompLines.length; i++) {
-                if (finalCompLines[i].trim().length === 0) continue;
-                
-                // 尝试查找3行或更多行的连续匹配
-                if (i + 2 < finalCompLines.length) {
-                    const chunk = finalCompLines.slice(i, i + 3);
-                    const trimmedChunk = chunk.map(line => line.trim()).filter(line => line.length > 0);
-                    
-                    // 只有当chunk中有足够的非空行时才检查
-                    if (trimmedChunk.length >= 2) {
-                        // 在文档中查找这个块
-                        for (let j = 0; j <= docLines.length - trimmedChunk.length; j++) {
-                            // 排除注释块
-                            if (this.isCommentLine(docLines[j], language)) {
-                                continue;
-                            }
-                            
-                            const docChunk = docLines.slice(j, j + trimmedChunk.length);
-                            const trimmedDocChunk = docChunk.map(line => line.trim()).filter(line => line.length > 0);
-                            
-                            if (trimmedChunk.length === trimmedDocChunk.length &&
-                                trimmedChunk.every((line, index) => line === trimmedDocChunk[index])) {
-                                // 找到重复块，移除所有行
-                                finalCompLines.splice(i, chunk.length);
-                                i--; // 回退索引，因为我们移除了当前行
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 处理可能的import语句重复
-            const importLines = finalCompLines.filter(line => 
-                line.trim().startsWith('import ') || 
-                line.trim().startsWith('from ') || 
-                line.trim().startsWith('#include ')
-            );
-            
-            for (const importLine of importLines) {
-                const importStatement = importLine.trim();
-                // 检查这个import语句是否已存在于文档中
-                if (docLines.some(line => line.trim() === importStatement)) {
-                    // 移除重复的import语句
-                    const index = finalCompLines.findIndex(line => line.trim() === importStatement);
-                    if (index !== -1) {
-                        finalCompLines.splice(index, 1);
-                    }
-                }
-            }
-            
-            // 最终输出
-            let result = finalCompLines.join('\n');
-            
-            // 如果结果只有空白字符，不应用
-            if (result.trim().length === 0) {
-                this.logger.debug('去重后内容为空，不应用');
-                return '';
-            }
-            
-            // 输出去重结果统计
-            const originalLineCount = compLines.length;
-            const finalLineCount = finalCompLines.length;
-            const duplicateLines = originalLineCount - finalLineCount;
-            const duplicateRate = duplicateLines > 0 ? Math.round((duplicateLines / originalLineCount) * 100) : 0;
-            this.logger.debug(`重复检测完成: 原始行数=${originalLineCount}, 去重后行数=${finalLineCount}, 重复行数=${duplicateLines}, 重复率=${duplicateRate}%`);
-            
-            return result;
-        } catch (error) {
-            this.logger.error('去重过程中出错', error);
-            return completionText; // 出错时返回原文本
-        }
-    }
-    
-    /**
-     * 从代码行中提取函数定义信息
-     * @param lines 代码行
-     * @returns 函数定义信息数组
-     */
-    private extractFunctions(lines: string[]): Array<{name: string, start: number, end: number}> {
-        const functions: Array<{name: string, start: number, end: number}> = [];
-        let currentFunction: {name: string, start: number} | null = null;
-        let indentLevel = 0;
-        
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const trimmedLine = line.trim();
-            
-            // 跳过空行和注释
-            if (trimmedLine.length === 0 || trimmedLine.startsWith('#')) {
-                continue;
-            }
-            
-            // 检测函数定义
-            if (trimmedLine.startsWith('def ')) {
-                const match = trimmedLine.match(/def\s+([a-zA-Z0-9_]+)\s*\(/);
-                if (match) {
-                    // 如果已经在处理一个函数，先结束它
-                    if (currentFunction) {
-                        functions.push({
-                            name: currentFunction.name,
-                            start: currentFunction.start,
-                            end: i - 1
-                        });
-                    }
-                    
-                    // 开始新函数
-                    currentFunction = {
-                        name: match[1],
-                        start: i
-                    };
-                    
-                    // 计算缩进级别
-                    indentLevel = line.search(/\S/);
-                }
-            }
-            // 检测函数结束
-            else if (currentFunction && 
-                    (i === lines.length - 1 || // 文件结束
-                     (line.search(/\S/) <= indentLevel && line.search(/\S/) >= 0))) { // 缩进减少
-                functions.push({
-                    name: currentFunction.name,
-                    start: currentFunction.start,
-                    end: i - 1
-                });
-                currentFunction = null;
-            }
-        }
-        
-        // 处理最后一个函数
-        if (currentFunction) {
-            functions.push({
-                name: currentFunction.name,
-                start: currentFunction.start,
-                end: lines.length - 1
-            });
-        }
-        
-        return functions;
-    }
-
-    /**
-     * 在指定位置直接应用补全（供外部调用）
-     */
-    public async applyCompletionAtPosition(document: vscode.TextDocument, position: vscode.Position): Promise<void> {
-        try {
-            // 只有当前有活动编辑器时才能应用补全
-            const editor = vscode.window.activeTextEditor;
-            if (!editor || editor.document.uri.toString() !== document.uri.toString()) {
-                this.logger.debug('没有合适的编辑器应用补全');
-                return;
-            }
-            
-            // 收集上下文
-            const context = this.collectContext(document, position);
-            if (!context) {
-                this.logger.debug('无法收集补全上下文');
-                return;
-            }
-            
-            // 调用Ollama API获取补全
-            this.logger.debug('调用Ollama API获取补全内容');
-            const completionText = await this.client.getCompletion(context);
-            
-            if (!completionText || completionText.trim().length === 0) {
-                this.logger.debug('获取到的补全内容为空');
-                return;
-            }
-            
-            // 处理补全文本
-            const lineText = document.lineAt(position.line).text;
-            const textBeforeCursor = lineText.substring(0, position.character);
-            let processedText = completionText;
-            
-            // 移除可能存在的代码块标记
-            if (processedText.startsWith('```')) {
-                const langMatch = processedText.match(/^```(\w+)\n/);
-                if (langMatch) {
-                    processedText = processedText.substring(langMatch[0].length);
-                } else {
-                    processedText = processedText.substring(3);
-                }
-            }
-            if (processedText.endsWith('```')) {
-                processedText = processedText.substring(0, processedText.length - 3);
-            }
-            
-            // 如果补全文本包含当前行的文本，移除这部分
-            if (processedText.startsWith(textBeforeCursor)) {
-                processedText = processedText.substring(textBeforeCursor.length);
-            }
-            
-            // 直接应用补全内容
-            this.applyCompletion(editor, position, processedText);
-            
-            // 保存结果用于后续操作
-            this.lastCompletionResult = completionText;
-            this.lastContext = context.prompt || '';
-            this.lastPosition = position;
         } catch (error) {
             this.logger.error('应用补全时出错', error);
+            throw error; // 重新抛出错误以便调用者处理
         }
     }
 
     /**
-     * 获取触发补全的字符
+     * 获取触发字符
      */
     public getTriggerCharacters(): string[] {
-        return ['#', '.', '(', ' ', '\n'];
+        return ['.', '(', '{', '[', ',', ' ', '\n'];
     }
 
     /**
      * 提供代码补全项
-     * 这是VSCode补全API的入口方法
      */
     public async provideCompletionItems(
         document: vscode.TextDocument,
@@ -595,301 +268,197 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         token: vscode.CancellationToken,
         context: vscode.CompletionContext
     ): Promise<vscode.CompletionItem[] | vscode.CompletionList | null> {
-        // 记录调用详细信息
-        this.logger.debug(`补全被触发: 文件=${document.fileName}, 位置=${position.line}:${position.character}, 触发原因=${context.triggerKind}, 触发字符='${context.triggerCharacter || ''}'`);
-        
-        // 检查插件是否已注册
-        if (!this.isRegisteredFlag) {
-            this.logger.debug('补全提供程序未注册，跳过补全');
-            return null;
-        }
-        
-        // 检查文件类型是否支持
-        if (!this.isFileTypeSupported(document)) {
-            this.logger.debug(`文件类型 ${document.languageId} 不支持，跳过补全`);
-            return null;
-        }
-        
         try {
-            const lineText = document.lineAt(position.line).text;
-            const textBeforeCursor = lineText.substring(0, position.character);
-            
-            this.logger.debug(`光标前文本: "${textBeforeCursor}"`);
-            
-            // 放宽补全触发条件
-            // 只有当行完全为空且不是由回车键触发时才不触发补全
-            if (textBeforeCursor.trim() === '') {
-                // 检查是否由回车键触发
-                const isEnterKeyTrigger = context.triggerKind === vscode.CompletionTriggerKind.TriggerCharacter && 
-                                         context.triggerCharacter === '\n';
-                
-                if (!isEnterKeyTrigger) {
-                    this.logger.debug('当前行完全为空，不是由回车键触发，不触发补全');
-                    return null;
-                }
-                
-                // 如果是回车键触发且当前行为空，检查上一行内容以提供智能补全
-                if (position.line > 0) {
-                    const previousLineText = document.lineAt(position.line - 1).text.trim();
-                    this.logger.debug(`回车键触发补全，上一行内容: "${previousLineText}"`);
-                    
-                    // 如果上一行为空，仍然不触发补全
-                    if (previousLineText === '') {
-                        this.logger.debug('上一行也为空，不触发补全');
-                        return null;
-                    }
-                } else {
-                    this.logger.debug('当前是文件第一行且为空，不触发补全');
-                    return null;
-                }
-            }
-            
-            // 总是尝试生成补全，不再检查上下文长度
-            this.logger.debug('开始生成补全...');
-            const completionList = await this.generateCompletions(document, position, token);
-            
-            if (completionList.items.length > 0) {
-                for (let i = 0; i < Math.min(completionList.items.length, 3); i++) {
-                    const item = completionList.items[i];
-                    this.logger.debug(`补全项 #${i+1}: label="${item.label}", kind=${item.kind}, preselect=${item.preselect}`);
-                    if (item.insertText instanceof vscode.SnippetString) {
-                        this.logger.debug(`补全项 #${i+1} 插入文本(SnippetString): ${item.insertText.value}`);
-                    } else if (typeof item.insertText === 'string') {
-                        this.logger.debug(`补全项 #${i+1} 插入文本(String): ${item.insertText}`);
-                    } else {
-                        this.logger.debug(`补全项 #${i+1} 没有insertText或类型未知`);
-                    }
-                }
-                return completionList;
-            } else {
-                this.logger.debug('没有生成补全项，返回null');
+            // 检查是否启用了代码补全
+            if (!this.configManager.isEnabled()) {
+                this.logger.debug('代码补全功能已禁用，不提供补全');
                 return null;
             }
-        } catch (error) {
-            this.logger.error('生成补全时出错', error);
-            return null;
-        }
-    }
 
-    /**
-     * 生成补全内容
-     */
-    private async generateCompletions(
-        document: vscode.TextDocument,
-        position: vscode.Position,
-        token: vscode.CancellationToken
-    ): Promise<vscode.CompletionList> {
-        // 检查是否取消
-        if (token.isCancellationRequested) {
-            return new vscode.CompletionList([], false);
-        }
-        
-        // 收集上下文信息
-        const context = this.collectContext(document, position);
-        if (!context) {
-            return new vscode.CompletionList([], false);
-        }
-        
-        // 检查用户是否在注释中
-        const isInComment = context.isInComment || false;
-        
-        // 获取文档内容
-        const documentText = document.getText();
-        
-        // 获取光标位置前后的文本
-        const cursorOffset = document.offsetAt(position);
-        const prefix = documentText.substring(0, cursorOffset);
-        const suffix = documentText.substring(cursorOffset);
-        
-        // 设置提示前缀
-        let promptPrefix = '';
-        
-        // 设置基本提示前缀
-        promptPrefix = `请为以下${context.language}代码补全后续内容。只输出代码，不要解释。上下文:\n`;
-        
-        // 构建完整提示
-        let prompt = promptPrefix + prefix;
-        
-        // 如果有下文，添加到提示中
-        if (suffix.trim().length > 0) {
-            prompt += `\n\n下文内容:\n${suffix}`;
-        }
-        
-        // 记录提示内容
-        if (this.configManager.isDebugEnabled()) {
-            this.logger.debug(`构建的模型提示: ${prompt.substring(0, 200)}...`);
-        }
-        
-        // 检查用户是否在注释中
-        context.isInComment = this.isUserInComment(document, position);
-        if (context.isInComment) {
-            context.commentMode = true; // 添加注释模式标记
-        } else {
-            context.commentMode = false;
-        }
-        
-        // 添加缓存的相关代码
-        if (this.configManager.isCacheEnabled()) {
-            const currentText = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
-            const language = document.languageId;
-            context.relevantCachedCode = await this.cacheManager.findRelevantCode(currentText, language);
-        }
+            // 记录触发信息
+            this.logger.debug(`触发补全，类型: ${context.triggerKind}, 字符: ${context.triggerCharacter || 'none'}`);
 
-        // 请求模型生成补全
-        let completionText = null;
-        try {
-            // 创建上下文信息，包含前面收集的信息
-            const contextForClient: any = {
-                document: document,
-                position: position,
-                documentText: document.getText(),
-                textBeforeCursor: this.getTextBeforeCursor(document, position),
-                importStatements: this.getImportStatements(document),
-                fileType: document.languageId,
-                filename: document.fileName,
-                relevantCachedCode: [],
-                previousCompletion: null,
-                isInComment: context ? context.isInComment : false,
-                prompt: prompt
-            };
-            
-            // 调用Ollama API获取补全
-            completionText = await this.client.getCompletion(contextForClient);
-        } catch (error) {
-            this.logger.error('请求模型生成补全时出错', error);
-            completionText = null;
-        }
-        
-        // 如果没有获取到补全内容，返回空列表
-        if (!completionText || completionText.trim().length === 0) {
-            this.logger.debug('获取到的补全内容为空');
-            return new vscode.CompletionList([], false);
-        }
-        
-        // 创建补全项
-        const completionItems = this.createCompletionItems(completionText, document, position, isInComment);
-        // 始终将是否有更多补全设置为false，禁用连续补全
-        const completionList = new vscode.CompletionList(completionItems, false);
-        
-        if (completionText) {
-            // 确保无论如何都应用补全
+            // 检查文件类型是否支持
+            if (!this.isFileTypeSupported(document)) {
+                this.logger.debug(`文件类型不支持: ${document.languageId}, 文件: ${document.fileName}`);
+                return null;
+            }
+
+            // 不要在SCM视图中补全
+            if (document.uri.scheme === "vscode-scm") {
+                this.logger.debug('SCM视图中不提供补全');
+                return null;
+            }
+
+            // 不要在多光标模式下补全
             const editor = vscode.window.activeTextEditor;
-            if (editor && editor.document.uri.toString() === document.uri.toString()) {
-                setTimeout(() => {
-                    this.logger.debug('直接应用补全内容');
-                    this.applyCompletion(editor, position, completionText);
-                }, 100);
+            if (editor && editor.selections.length > 1) {
+                this.logger.debug('多光标模式下不提供补全');
+                return null;
             }
-        }
-        
-        return completionList;
-    }
 
-    /**
-     * 收集文档上下文信息
-     */
-    private collectContext(
-        document: vscode.TextDocument,
-        position: vscode.Position
-    ): any {
-        this.logger.debug('收集文档上下文信息');
-        
-        const maxContextLines = this.configManager.getMaxContextLines();
-        const includeImports = this.configManager.shouldIncludeImports();
-        const includeComments = this.configManager.shouldIncludeComments();
-        
-        // 获取当前行以上的内容
-        const startLine = Math.max(0, position.line - maxContextLines);
-        const precedingText = document.getText(
-            new vscode.Range(
-                new vscode.Position(startLine, 0),
-                position
-            )
-        );
-        
-        // 获取当前行
-        const currentLine = document.lineAt(position.line).text.substring(0, position.character);
-        
-        // 获取当前文件的部分内容作为上下文
-        const fileContext = document.getText(
-            new vscode.Range(
-                new vscode.Position(0, 0),
-                new vscode.Position(
-                    Math.min(document.lineCount, position.line + maxContextLines / 2),
-                    0
-                )
-            )
-        );
-        
-        if (this.configManager.shouldLogPerformance()) {
-            this.logger.debug(`上下文文本大小: 前文=${precedingText.length}字符, 当前行=${currentLine.length}字符, 文件上下文=${fileContext.length}字符`);
-        }
-        
-        return {
-            precedingText,
-            currentLine,
-            fileContext,
-            position,
-            document,
-            language: document.languageId,
-            fileName: document.fileName,
-            includeImports,
-            includeComments,
-            isInComment: false
-        };
-    }
+            // 创建中止信号
+            const completionId = uuidv4();
+            const controller = this.createAbortController(completionId);
+            const signal = controller.signal;
+            this.logger.debug(`创建补全请求: ${completionId}`);
+            
+            // 如果传入了token，监听取消事件
+            if (token) {
+                token.onCancellationRequested(() => controller.abort());
+            }
 
-    /**
-     * 创建补全项
-     */
-    private createCompletionItems(
-        completionText: string | null,
-        document: vscode.TextDocument,
-        position: vscode.Position,
-        _isInComment: boolean = false
-    ): vscode.CompletionItem[] {
-        try {
-            if (!completionText || completionText.trim().length === 0) {
-                return [];
+            // 更新状态栏
+            this.statusBarItem.text = "$(sync~spin) 生成补全...";
+            this.statusBarItem.tooltip = "正在生成代码补全";
+            this.statusBarItem.show();
+
+            const startTime = Date.now();
+
+            // 收集上下文
+            const contextData = this.collectContext(document, position);
+            this.logger.debug(`收集上下文完成，前缀长度: ${contextData.prefix.length}, 后缀长度: ${contextData.suffix.length}`);
+            
+            // 从缓存中查找
+            let completion: string | null = null;
+            let cacheHit = false;
+            
+            if (this.configManager.isCacheEnabled()) {
+                this.logger.debug('缓存已启用，尝试从缓存获取补全');
+                try {
+                    const cachedCompletion = await this.cacheManager.get(contextData.prefix);
+                    if (cachedCompletion) {
+                        completion = cachedCompletion;
+                        cacheHit = true;
+                        this.logger.debug('使用缓存的补全结果');
+                    } else {
+                        this.logger.debug('缓存未命中');
+                    }
+                } catch (error) {
+                    this.logger.debug(`从缓存获取补全时出错: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            } else {
+                this.logger.debug('缓存已禁用');
             }
-            
-            // 检查补全文本是否已经存在于文档中
-            const documentText = document.getText();
-            if (documentText.includes(completionText)) {
-                return [];
+
+            // 如果缓存中没有，则请求模型生成
+            if (!completion) {
+                try {
+                    // 准备提示
+                    const prompt = this.preparePrompt(contextData);
+                    this.logger.debug(`准备提示完成，提示长度: ${prompt.length}`);
+                    
+                    // 获取API配置
+                    const modelName = this.configManager.getModelName();
+                    const temperature = this.configManager.getTemperature();
+                    const maxTokens = this.configManager.getMaxTokens();
+                    this.logger.debug(`API配置: 模型=${modelName}, 温度=${temperature}, 最大token=${maxTokens}`);
+                    
+                    // 请求模型生成补全
+                    this.logger.debug('开始调用模型生成补全');
+                    completion = await this.client.generateCompletion(
+                        prompt,
+                        {
+                            temperature: temperature,
+                            maxTokens: maxTokens,
+                            model: modelName
+                        },
+                        signal
+                    );
+                    
+                    // 如果请求被中止，返回null
+                    if (signal.aborted) {
+                        this.logger.debug('补全请求被中止');
+                        this.statusBarItem.text = "$(code) 补全";
+                        this.statusBarItem.tooltip = "Ollama代码补全";
+                        return null;
+                    }
+                    
+                    if (completion) {
+                        this.logger.debug(`模型生成补全成功，原始补全长度: ${completion.length}`);
+                    } else {
+                        this.logger.debug('模型返回空补全');
+                    }
+                    
+                    // 处理补全结果
+                    completion = this.processCompletionResult(completion, contextData);
+                    
+                    if (completion) {
+                        this.logger.debug(`处理后的补全长度: ${completion.length}`);
+                    } else {
+                        this.logger.debug('处理后补全为空');
+                    }
+                    
+                    // 保存到缓存
+                    if (this.configManager.isCacheEnabled() && completion) {
+                        this.logger.debug('将补全结果保存到缓存');
+                        await this.cacheManager.put(contextData.prefix, completion);
+                    }
+                } catch (error) {
+                    if (signal.aborted) {
+                        this.logger.debug('补全请求被中止');
+                        this.statusBarItem.text = "$(code) 补全";
+                        this.statusBarItem.tooltip = "Ollama代码补全";
+                        return null;
+                    }
+                    
+                    this.logger.error(`生成补全时出错: ${error instanceof Error ? error.message : String(error)}`);
+                    this.onError(error);
+                    this.statusBarItem.text = "$(code) 补全";
+                    this.statusBarItem.tooltip = "Ollama代码补全";
+                    return null;
+                }
             }
-            
-            // 分析文档和补全内容，避免重复
-            const docLines = documentText.split('\n');
-            const compLines = completionText.split('\n');
-            
-            // 找出新增行（不在文档中的行）
-            let newLines = compLines.filter(line => {
-                // 忽略空行和只有空格的行
-                if (line.trim().length === 0) return false;
-                // 检查这行是否已经在文档中存在（精确匹配）
-                return !docLines.some(docLine => docLine.trim() === line.trim());
-            });
-            
-            // 如果所有行都已存在，则不提供补全
-            if (newLines.length === 0) {
-                return [];
+
+            // 如果没有生成补全内容，返回null
+            if (!completion) {
+                this.logger.debug('没有生成补全内容，返回null');
+                this.statusBarItem.text = "$(code) 补全";
+                this.statusBarItem.tooltip = "Ollama代码补全";
+                return null;
             }
-            
-            this.logger.debug(`创建补全项，最终内容长度: ${completionText.length}字符`);
-            
+
+            // 记录结果
+            this.lastCompletionResult = completion;
+            this.lastContext = contextData.prefix;
+            this.lastPosition = position;
+            this.logger.debug(`记录补全结果，长度: ${completion.length}`);
+
+            // 构建补全结果对象
+            const outcome = {
+                time: Date.now() - startTime,
+                completion,
+                prefix: contextData.prefix,
+                suffix: contextData.suffix,
+                prompt: contextData.prompt,
+                modelProvider: 'ollama',
+                modelName: this.configManager.getModelName(),
+                cacheHit,
+                filepath: document.uri.toString(),
+                numLines: completion.split("\n").length,
+                completionId,
+                timestamp: Date.now(),
+            };
+
+            // 标记为已显示
+            this.markDisplayed(completionId, outcome);
+            this.lastShownCompletion = outcome;
+
             // 创建补全项
-            const item = new vscode.CompletionItem(completionText.split('\n')[0].substring(0, 50) + '...', vscode.CompletionItemKind.Snippet);
+            const item = new vscode.CompletionItem(
+                completion.split('\n')[0] + '...',
+                vscode.CompletionItemKind.Snippet
+            );
             
             // 设置插入文本
-            item.insertText = completionText;
+            item.insertText = completion;
             
             // 设置详细信息
             item.detail = '基于上下文的AI补全';
             
             // 设置文档
             item.documentation = new vscode.MarkdownString(
-                '```' + document.languageId + '\n' + completionText + '\n```'
+                '```' + document.languageId + '\n' + completion + '\n```'
             );
             
             // 设置排序文本，确保我们的补全项排在前面
@@ -898,75 +467,260 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             // 设置为预选项，让用户可以直接按Tab选择
             item.preselect = true;
             
-            // 添加插入规则，让VSCode知道这是纯文本插入
-            // 注意：不使用insertTextRules，因为它在某些VSCode版本中可能不存在
-            
-            // 重要：使用resolveCompletionItem回调而非command
+            // 设置命令
             item.command = {
                 title: '应用代码补全',
                 command: 'ollamaCompletion.applyCompletion',
-                arguments: [document, position, completionText]
+                arguments: [completionId]
             };
             
+            // 更新状态栏
+            this.statusBarItem.text = "$(code) 补全";
+            this.statusBarItem.tooltip = "Ollama代码补全";
+            this.logger.debug('成功创建补全项，返回补全结果');
+
             return [item];
         } catch (error) {
-            this.logger.error('创建补全项时出错', error);
-            return [];
+            this.logger.error(`provideCompletionItems方法出错: ${error instanceof Error ? error.message : String(error)}`);
+            this.onError(error);
+            return null;
+        } finally {
+            this.statusBarItem.text = "$(code) 补全";
+            this.statusBarItem.tooltip = "Ollama代码补全";
         }
     }
 
     /**
-     * 检查是否支持当前文件类型
+     * 准备提示
      */
-    private isFileTypeSupported(document: vscode.TextDocument): boolean {
-        const fileName = document.fileName.toLowerCase();
-        const languageId = document.languageId;
-        const enabledTypes = this.configManager.getEnabledFileTypes();
-        const disabledTypes = this.configManager.getDisabledFileTypes();
+    private preparePrompt(contextData: any): string {
+        // 构建提示模板
+        let prompt = `你是一个智能代码补全助手。请根据以下上下文，补全代码。只返回补全的代码，不要包含任何解释或注释。
+
+上下文:
+\`\`\`
+${contextData.prefix}
+\`\`\`
+
+请直接补全代码:`;
+
+        return prompt;
+    }
+
+    /**
+     * 处理补全结果
+     */
+    private processCompletionResult(completion: string | null, contextData: any): string | null {
+        if (!completion) {
+            return null;
+        }
         
-        this.logger.debug(`检查文件类型支持: 文件=${fileName}, 语言ID=${languageId}`);
-        this.logger.debug(`启用的文件类型: ${JSON.stringify(enabledTypes)}`);
-        this.logger.debug(`禁用的文件类型: ${JSON.stringify(disabledTypes)}`);
+        // 移除可能的代码块标记
+        let processedText = completion;
+        if (processedText.startsWith('```')) {
+            const langMatch = processedText.match(/^```(\w+)\n/);
+            if (langMatch) {
+                processedText = processedText.substring(langMatch[0].length);
+            } else {
+                processedText = processedText.substring(3);
+            }
+        }
+        if (processedText.endsWith('```')) {
+            processedText = processedText.substring(0, processedText.length - 3);
+        }
         
-        // 根据文件路径检查是否应该被排除
-        // ConfigManager没有getExcludePatterns方法，使用空数组
-        const excludePatterns: string[] = [];
+        // 如果补全文本包含前缀，移除这部分
+        if (processedText.startsWith(contextData.prefix)) {
+            processedText = processedText.substring(contextData.prefix.length);
+        }
         
-        for (const pattern of excludePatterns) {
-            if (new RegExp(pattern).test(fileName)) {
-                this.logger.debug(`文件路径 ${fileName} 匹配排除模式 ${pattern}`);
-                return false;
+        return processedText;
+    }
+
+    /**
+     * 收集上下文
+     */
+    private collectContext(
+        document: vscode.TextDocument,
+        position: vscode.Position
+    ): any {
+        // 获取当前文件的内容
+        const text = document.getText();
+        const offset = document.offsetAt(position);
+        
+        // 分割前缀和后缀
+        const prefix = text.substring(0, offset);
+        const suffix = text.substring(offset);
+        
+        // 获取导入语句
+        const imports = this.getImportStatements(document);
+        
+        // 获取上下文行数
+        const maxContextLines = this.configManager.getMaxContextLines();
+        
+        // 获取前面的行
+        const lines = prefix.split('\n');
+        const contextLines = lines.slice(Math.max(0, lines.length - maxContextLines));
+        
+        // 构建上下文
+        const context = {
+            prefix,
+            suffix,
+            prompt: '',
+            imports,
+            language: document.languageId,
+            lineCount: document.lineCount,
+            fileName: document.fileName,
+            contextLines: contextLines.join('\n')
+        };
+        
+        return context;
+    }
+
+    /**
+     * 获取导入语句
+     */
+    private getImportStatements(document: vscode.TextDocument): string[] {
+        const text = document.getText();
+        const lines = text.split('\n');
+        const imports: string[] = [];
+        
+        // 根据语言类型识别导入语句
+        const language = document.languageId;
+        
+        // 正则表达式匹配不同语言的导入语句
+        let importRegex: RegExp;
+        
+        switch (language) {
+            case 'javascript':
+            case 'typescript':
+            case 'javascriptreact':
+            case 'typescriptreact':
+                importRegex = /^(import|export)\s+.*/;
+                break;
+            case 'python':
+                importRegex = /^(import|from)\s+.*/;
+                break;
+            case 'java':
+            case 'kotlin':
+                importRegex = /^import\s+.*/;
+                break;
+            case 'go':
+                importRegex = /^import\s+[\(\"].*[\)\"]$/;
+                break;
+            case 'rust':
+                importRegex = /^(use|extern crate)\s+.*/;
+                break;
+            case 'c':
+            case 'cpp':
+            case 'csharp':
+                importRegex = /^#include\s+.*/;
+                break;
+            case 'php':
+                importRegex = /^(use|require|include|require_once|include_once)\s+.*/;
+                break;
+            case 'ruby':
+                importRegex = /^(require|include|extend|load|autoload)\s+.*/;
+                break;
+            default:
+                // 默认匹配常见的导入关键字
+                importRegex = /^(import|export|require|include|use|from)\s+.*/;
+        }
+        
+        // 收集导入语句
+        for (const line of lines) {
+            if (importRegex.test(line.trim())) {
+                imports.push(line);
             }
         }
         
-        // 如果在禁用列表中，则不支持
-        if (disabledTypes.includes(languageId)) {
-            this.logger.debug(`语言ID ${languageId} 在禁用列表中`);
-            return false;
-        }
-        
-        // 如果启用类型为空或包含 "all"，则所有未明确禁用的类型都支持
-        if (enabledTypes.length === 0 || enabledTypes.includes('all')) {
-            this.logger.debug(`支持所有未禁用的文件类型`);
-            return true;
-        }
-        
-        // 否则，只有在启用列表中的才支持
-        const isSupported = enabledTypes.includes(languageId);
-        this.logger.debug(`语言ID ${languageId} ${isSupported ? '在' : '不在'}启用列表中`);
-        
-        // 对于常见编程语言，即使不在启用列表中也支持
-        const commonLanguages = ['javascript', 'typescript', 'python', 'java', 'c', 'cpp', 'csharp', 'go', 'rust', 'php', 'ruby'];
-        if (!isSupported && commonLanguages.includes(languageId)) {
-            this.logger.debug(`语言ID ${languageId} 是常见编程语言，强制启用支持`);
-            return true;
-        }
-        
-        return isSupported;
+        return imports;
     }
 
     /**
-     * 判断补全提供器是否已注册
+     * 检查文件类型是否支持
+     */
+    public isFileTypeSupported(document: vscode.TextDocument): boolean {
+        try {
+            // 获取文件扩展名和语言ID
+            const fileName = document.fileName;
+            const fileExt = fileName.substring(fileName.lastIndexOf('.'));
+            const languageId = document.languageId;
+            
+            // 常见编程语言列表 - 如果用户没有明确配置，这些语言默认支持
+            const commonLanguages = [
+                'javascript', 'typescript', 'python', 'java', 'c', 'cpp', 
+                'csharp', 'go', 'rust', 'php', 'ruby', 'html', 'css'
+            ];
+            
+            // 记录调试信息
+            this.logger.debug(`检查文件类型支持: 扩展名=${fileExt}, 语言ID=${languageId}`);
+            
+            // 1. 首先检查全局启用状态
+            if (!this.configManager.isEnabled()) {
+                this.logger.debug('插件全局禁用');
+                return false;
+            }
+            
+            // 2. 检查是否在禁用列表中
+            try {
+                const disabledTypesArr = this.configManager.getDisabledFileTypes();
+                const disabledTypes = Array.isArray(disabledTypesArr) ? disabledTypesArr : [];
+                
+                if (disabledTypes.includes(fileExt) || disabledTypes.includes(languageId)) {
+                    this.logger.debug(`文件类型在禁用列表中: ${disabledTypes.join(',')}`);
+                    return false;
+                }
+            } catch (error) {
+                this.logger.debug(`获取禁用类型时出错: ${error}`);
+            }
+            
+            // 3. 检查是否在启用列表中
+            try {
+                const enabledTypesArr = this.configManager.getEnabledFileTypes();
+                
+                // 确保我们有一个数组
+                const enabledTypes = Array.isArray(enabledTypesArr) ? enabledTypesArr : [];
+                
+                // 记录启用类型
+                this.logger.debug(`启用类型: ${JSON.stringify(enabledTypes)}`);
+                
+                // 如果启用了所有类型
+                if (enabledTypes.includes('*') || enabledTypes.includes('all')) {
+                    this.logger.debug('支持所有文件类型');
+                    return true;
+                }
+                
+                // 检查扩展名或语言ID是否明确启用
+                if (enabledTypes.includes(fileExt) || enabledTypes.includes(languageId)) {
+                    this.logger.debug(`文件类型明确启用: ${fileExt} 或 ${languageId}`);
+                    return true;
+                }
+                
+                // 如果是常见编程语言，但没有明确禁用，则支持
+                if (commonLanguages.includes(languageId)) {
+                    this.logger.debug(`常见编程语言自动支持: ${languageId}`);
+                    return true;
+                }
+            } catch (error) {
+                this.logger.debug(`获取启用类型时出错: ${error}`);
+                
+                // 如果出错，默认支持常见编程语言
+                if (commonLanguages.includes(languageId)) {
+                    return true;
+                }
+            }
+            
+            this.logger.debug(`文件类型不支持: ${languageId}, ${fileExt}`);
+            return false;
+        } catch (error) {
+            this.logger.error(`检查文件类型支持时出错: ${error}`);
+            return false;
+        }
+    }
+
+    /**
+     * 检查是否已注册
      */
     public isRegistered(): boolean {
         return this.isRegisteredFlag;
@@ -977,162 +731,90 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
      */
     public setRegistered(value: boolean): void {
         this.isRegisteredFlag = value;
-        this.logger.debug(`CompletionProvider 注册状态设置为: ${value}`);
     }
 
     /**
      * 释放资源
      */
     public dispose(): void {
-        // 清理资源
-        if (this.diagnosticsCollection) {
-            this.diagnosticsCollection.clear();
-            this.diagnosticsCollection.dispose();
-        }
-        
-        this.logger.debug('释放CompletionProvider资源');
-        this.isRegisteredFlag = false;
+        this.cancel();
+        this.logger.debug('CompletionProvider 已释放');
     }
 
     /**
-     * 获取光标前的文本
+     * 设置最后使用的装饰器
      */
-    private getTextBeforeCursor(document: vscode.TextDocument, position: vscode.Position): string {
-        // 获取当前文档从开始到光标位置的所有文本
-        return document.getText(new vscode.Range(0, 0, position.line, position.character));
+    public setLastDecorator(decorator: vscode.TextEditorDecorationType): void {
+        // 如果已经有装饰器，先清除它
+        this.clearPreview();
+        this.lastDecorator = decorator;
     }
 
     /**
-     * 获取文档中的导入语句
+     * 设置最后的插入文本
      */
-    private getImportStatements(document: vscode.TextDocument): string[] {
-        const text = document.getText();
-        const importStatements: string[] = [];
-        const languageId = document.languageId;
-        
-        // 根据不同语言匹配导入语句
-        let regex: RegExp;
-        
-        switch (languageId) {
-            case 'python':
-                regex = /^(?:import|from)\s+.+$/gm;
-                break;
-            case 'javascript':
-            case 'typescript':
-            case 'typescriptreact':
-            case 'javascriptreact':
-                regex = /^(?:import|export)\s+.+$/gm;
-                break;
-            case 'java':
-            case 'kotlin':
-            case 'scala':
-                regex = /^(?:import|package)\s+.+$/gm;
-                break;
-            case 'go':
-                regex = /^(?:import|package)\s+.+$/gm;
-                break;
-            default:
-                regex = /^(?:import|using|include|require|from|package)\s+.+$/gm;
-        }
-        
-        let match;
-        while ((match = regex.exec(text)) !== null) {
-            importStatements.push(match[0]);
-        }
-        
-        return importStatements;
+    public setLastInsertText(text: string): void {
+        this.lastInsertText = text;
     }
 
     /**
-     * 判断用户是否在注释中
+     * 设置最后的位置
      */
-    private isUserInComment(document: vscode.TextDocument, position: vscode.Position): boolean {
-        const text = document.getText();
-        const offset = document.offsetAt(position);
-        const languageId = document.languageId;
-        
-        // 根据不同语言处理注释
-        switch (languageId) {
-            case 'python':
-                // 检查单行注释 #
-                const lineText = document.lineAt(position.line).text.substring(0, position.character);
-                if (lineText.trim().startsWith('#')) {
-                    return true;
-                }
-                
-                // 检查多行注释 ''' 或 """
-                const singleLineOffset = document.offsetAt(new vscode.Position(position.line, 0));
-                const textUntilPosition = text.substring(0, offset);
-                
-                const tripleQuoteRegex = /(?:'''|""")[\s\S]*?(?:'''|""")|(?:'''|""")/g;
-                let match;
-                while ((match = tripleQuoteRegex.exec(textUntilPosition)) !== null) {
-                    const commentStart = match.index;
-                    const commentEnd = commentStart + match[0].length;
-                    
-                    if (offset >= commentStart && offset <= commentEnd) {
-                        return true;
-                    }
-                }
-                return false;
-                
-            case 'javascript':
-            case 'typescript':
-            case 'typescriptreact':
-            case 'javascriptreact':
-            case 'c':
-            case 'cpp':
-            case 'csharp':
-            case 'java':
-            case 'go':
-                // 检查单行注释 //
-                const jsLineText = document.lineAt(position.line).text.substring(0, position.character);
-                if (jsLineText.trim().startsWith('//')) {
-                    return true;
-                }
-                
-                // 检查多行注释 /* */
-                const singleLineOffset2 = document.offsetAt(new vscode.Position(position.line, 0));
-                const textUntilPosition2 = text.substring(0, offset);
-                
-                const lastCommentStart = textUntilPosition2.lastIndexOf('/*');
-                const lastCommentEnd = textUntilPosition2.lastIndexOf('*/');
-                
-                return lastCommentStart !== -1 && (lastCommentEnd === -1 || lastCommentEnd < lastCommentStart);
-                
-            default:
-                return false;
-        }
+    public setLastPosition(position: vscode.Position): void {
+        this.lastPosition = position;
     }
 
     /**
-     * 计算两个字符串的相似度 (0-1)
+     * 设置最后的预览位置
      */
-    private calculateSimilarity(str1: string, str2: string): number {
-        // 去除空格和命名空间前缀进行规范化
-        const normalized1 = str1.replace(/\s+/g, ' ').replace(/std::/g, '').trim();
-        const normalized2 = str2.replace(/\s+/g, ' ').replace(/std::/g, '').trim();
-        
-        if (normalized1 === normalized2) return 1.0;
-        if (normalized1.length === 0 || normalized2.length === 0) return 0.0;
-        
-        // 一个简单的相似度计算方法 - 可以替换为更复杂的算法
-        const longerStr = normalized1.length > normalized2.length ? normalized1 : normalized2;
-        const shorterStr = normalized1.length > normalized2.length ? normalized2 : normalized1;
-        
-        // 检查子串包含关系
-        if (longerStr.includes(shorterStr)) {
-            return shorterStr.length / longerStr.length;
-        }
-        
-        // 计算共同字符
-        let common = 0;
-        for (let i = 0; i < shorterStr.length; i++) {
-            if (longerStr.includes(shorterStr[i])) {
-                common++;
-            }
-        }
-        
-        return common / longerStr.length;
+    public setLastPreviewPosition(position: vscode.Position | null): void {
+        this.lastPreviewPosition = position;
     }
-} 
+
+    /**
+     * 获取最后的插入文本
+     */
+    public getLastInsertText(): string | null {
+        return this.lastInsertText;
+    }
+
+    /**
+     * 获取最后的位置
+     */
+    public getLastPosition(): vscode.Position | null {
+        return this.lastPosition;
+    }
+
+    /**
+     * 检查是否有活动的预览
+     */
+    public hasActivePreview(): boolean {
+        return this.lastDecorator !== null && this.lastInsertText !== null && this.lastPreviewPosition !== null;
+    }
+
+    /**
+     * 清除预览
+     */
+    public clearPreview(): void {
+        if (this.lastDecorator) {
+            this.lastDecorator.dispose();
+            this.lastDecorator = null;
+        }
+        this.lastInsertText = null;
+        this.lastPreviewPosition = null;
+    }
+
+    /**
+     * 获取最后使用的装饰器
+     */
+    public getLastDecorator(): vscode.TextEditorDecorationType | null {
+        return this.lastDecorator;
+    }
+
+    /**
+     * 获取最后的预览位置
+     */
+    public getLastPreviewPosition(): vscode.Position | null {
+        return this.lastPreviewPosition;
+    }
+}
