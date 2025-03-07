@@ -30,6 +30,8 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
     private lastDecorator: vscode.TextEditorDecorationType | null = null;
     private lastInsertText: string | null = null;
     private lastPreviewPosition: vscode.Position | null = null;
+    private temporaryLines: number = 0;  // 跟踪临时插入的空行数量
+    private originalPosition: vscode.Position | null = null;  // 记录原始光标位置
 
     /**
      * 构造函数
@@ -161,18 +163,41 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
      */
     public async accept(completionId: string): Promise<void> {
         this.logger.debug(`接受补全: ${completionId}`);
-        // 可以在这里添加接受补全的统计或其他逻辑
         
-        // 如果有活动编辑器，应用补全
-        if (this.lastShownCompletion && this.lastShownCompletion.completion) {
-            const editor = vscode.window.activeTextEditor;
-            if (editor) {
-                const document = editor.document;
-                const position = editor.selection.active;
-                
-                // 应用补全
-                await this.applyCompletion(editor, position, this.lastShownCompletion.completion);
+        try {
+            // 如果有活动编辑器且有预览内容
+            if (this.lastDecorator && this.lastInsertText && this.originalPosition) {
+                const editor = vscode.window.activeTextEditor;
+                if (editor) {
+                    // 先删除预览内容
+                    const lines = this.lastInsertText.split('\n');
+                    const endPosition = new vscode.Position(
+                        this.originalPosition.line + lines.length - 1,
+                        lines[lines.length - 1].length + (lines.length === 1 ? this.originalPosition.character : 0)
+                    );
+                    const range = new vscode.Range(this.originalPosition, endPosition);
+
+                    // 删除预览内容并插入正式内容
+                    await editor.edit(editBuilder => {
+                        editBuilder.delete(range);
+                        editBuilder.insert(this.originalPosition, this.lastInsertText);
+                    });
+
+                    // 清除预览装饰器
+                    this.lastDecorator.dispose();
+                    this.lastDecorator = null;
+                    
+                    // 重置状态
+                    this.lastInsertText = null;
+                    this.lastPreviewPosition = null;
+                    this.lastPosition = null;
+                    this.originalPosition = null;
+                }
             }
+        } catch (error) {
+            this.logger.error('接受补全时出错', error);
+            // 如果出错，尝试清除预览
+            await this.clearPreview();
         }
     }
 
@@ -330,6 +355,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                     if (cachedCompletion) {
                         completion = cachedCompletion;
                         cacheHit = true;
+                        contextData.cacheHit = true;  // 添加缓存命中标记到上下文
                         this.logger.debug('使用缓存的补全结果');
                     } else {
                         this.logger.debug('缓存未命中');
@@ -408,6 +434,9 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                     this.statusBarItem.tooltip = "Ollama代码补全";
                     return null;
                 }
+            } else {
+                // 如果是缓存的结果，也需要处理
+                completion = this.processCompletionResult(completion, contextData);
             }
 
             // 如果没有生成补全内容，返回null
@@ -453,6 +482,9 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             // 设置插入文本
             item.insertText = completion;
             
+            // 防止Tab键插入文本
+            item.keepWhitespace = true;
+            
             // 设置详细信息
             item.detail = '基于上下文的AI补全';
             
@@ -479,6 +511,9 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             this.statusBarItem.tooltip = "Ollama代码补全";
             this.logger.debug('成功创建补全项，返回补全结果');
 
+            // 设置预览
+            await this.setPreview(completion, position);
+
             return [item];
         } catch (error) {
             this.logger.error(`provideCompletionItems方法出错: ${error instanceof Error ? error.message : String(error)}`);
@@ -495,7 +530,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
      */
     private preparePrompt(contextData: any): string {
         // 构建提示模板
-        let prompt = `你是一个智能代码补全助手。请根据以下上下文，补全代码。只返回补全的代码，不要包含任何解释或注释。
+        let prompt = `你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。
 
 上下文:
 \`\`\`
@@ -528,10 +563,42 @@ ${contextData.prefix}
         if (processedText.endsWith('```')) {
             processedText = processedText.substring(0, processedText.length - 3);
         }
+
+        // 如果补全文本与上下文完全相同，则跳过
+        if (processedText === contextData.prefix) {
+            this.logger.debug('跳过完全重复的补全内容');
+            return null;
+        }
+
+        // 检查补全内容是否大部分与上下文重复
+        const prefixLines = contextData.prefix.split('\n');
+        const completionLines = processedText.split('\n');
         
-        // 如果补全文本包含前缀，移除这部分
-        if (processedText.startsWith(contextData.prefix)) {
-            processedText = processedText.substring(contextData.prefix.length);
+        // 计算重复行的数量
+        let duplicateLines = 0;
+        for (const line of completionLines) {
+            if (prefixLines.some(prefixLine => prefixLine.trim() === line.trim())) {
+                duplicateLines++;
+            }
+        }
+
+        // 如果重复行占比超过50%，则跳过
+        const duplicateRatio = duplicateLines / completionLines.length;
+        if (duplicateRatio > 0.5) {
+            this.logger.debug(`跳过重复率过高的补全内容 (${Math.round(duplicateRatio * 100)}%)`);
+            return null;
+        }
+
+        // 如果补全内容是上下文的子集，则跳过
+        if (contextData.prefix.includes(processedText)) {
+            this.logger.debug('跳过上下文子集的补全内容');
+            return null;
+        }
+
+        // 检查补全内容是否与上一次相同，且不是来自缓存
+        if (!contextData.cacheHit && processedText === this.lastCompletionResult) {
+            this.logger.debug('跳过重复的补全内容');
+            return null;
         }
         
         return processedText;
@@ -805,67 +872,100 @@ ${contextData.prefix}
     /**
      * 清除预览
      */
-    public clearPreview(): void {
+    public async clearPreview(): Promise<void> {
         try {
-            // 清除并释放装饰器
+            const editor = vscode.window.activeTextEditor;
+            
+            // 先清除装饰器
             if (this.lastDecorator) {
                 this.lastDecorator.dispose();
                 this.lastDecorator = null;
             }
             
-            // 清除编辑器中的所有预览装饰器
-            const editor = vscode.window.activeTextEditor;
-            if (editor) {
-                const emptyDecorationType = vscode.window.createTextEditorDecorationType({});
-                editor.setDecorations(emptyDecorationType, []);
-                emptyDecorationType.dispose();
+            // 如果有插入的内容，需要删除它
+            if (this.lastInsertText && editor && this.originalPosition) {
+                const lines = this.lastInsertText.split('\n');
+                const endPosition = new vscode.Position(
+                    this.originalPosition.line + lines.length - 1,
+                    lines[lines.length - 1].length + (lines.length === 1 ? this.originalPosition.character : 0)
+                );
+                
+                await editor.edit(editBuilder => {
+                    const range = new vscode.Range(this.originalPosition, endPosition);
+                    editBuilder.delete(range);
+                });
+
+                // 确保删除操作完成后再重置状态
+                await editor.document.save();
             }
             
             // 重置所有状态
             this.lastInsertText = null;
             this.lastPreviewPosition = null;
             this.lastPosition = null;
+            this.originalPosition = null;
             
             this.logger.debug('预览已清除');
         } catch (error) {
             this.logger.error('清除预览时出错', error);
+            // 即使出错也要重置状态
+            this.lastDecorator = null;
+            this.lastInsertText = null;
+            this.lastPreviewPosition = null;
+            this.lastPosition = null;
+            this.originalPosition = null;
         }
     }
 
     /**
      * 设置预览
      */
-    public setPreview(text: string, position: vscode.Position): void {
+    public async setPreview(text: string, position: vscode.Position): Promise<void> {
         try {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
                 return;
             }
 
-            // 清除之前的预览
-            this.clearPreview();
+            // 确保完全清除之前的预览
+            await this.clearPreview();
+            
+            // 等待一下确保清除操作完成
+            await new Promise(resolve => setTimeout(resolve, 50));
+            
+            // 将文本分割成行
+            const lines = text.split('\n');
 
-            // 创建新的装饰器
-            const decorationType = vscode.window.createTextEditorDecorationType({
-                after: {
-                    contentText: text,
-                    color: '#888888'
-                }
+            // 创建新的装饰器，使插入的内容看起来像预览
+            this.lastDecorator = vscode.window.createTextEditorDecorationType({
+                opacity: '0.6'
             });
 
+            // 直接将补全内容插入到文档中
+            await editor.edit(editBuilder => {
+                editBuilder.insert(position, text);
+            });
+
+            // 计算装饰范围
+            const endPosition = new vscode.Position(
+                position.line + lines.length - 1,
+                lines[lines.length - 1].length + (lines.length === 1 ? position.character : 0)
+            );
+            const range = new vscode.Range(position, endPosition);
+
             // 应用装饰器
-            editor.setDecorations(decorationType, [new vscode.Range(position, position)]);
+            editor.setDecorations(this.lastDecorator, [{ range }]);
 
             // 保存状态
-            this.lastDecorator = decorationType;
             this.lastInsertText = text;
             this.lastPosition = position;
             this.lastPreviewPosition = position;
+            this.originalPosition = position;
             
-            this.logger.debug('预览已设置');
+            this.logger.debug(`预览已设置，直接插入了${lines.length}行内容`);
         } catch (error) {
             this.logger.error('设置预览时出错', error);
-            this.clearPreview();
+            await this.clearPreview();
         }
     }
 
