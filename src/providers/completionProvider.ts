@@ -586,33 +586,25 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             processedText = processedText.substring(0, processedText.length - 3);
         }
 
-        // 如果补全文本与上下文完全相同，则跳过
-        if (processedText === contextData.prefix) {
+        let text = contextData.prefix + contextData.suffix;
+        const textlines = text.split('\n');
+        const processedTextlines = processedText.split('\n');
+        const textlinesset = new Set<string>();
+        for(const line of textlines){
+            textlinesset.add(line.trim());
+        }
+
+        let findnum = 0;
+        for(const line of processedTextlines){
+            if(textlinesset.has(line.trim())){
+                findnum++;
+            }
+        }
+        if(findnum == processedTextlines.length){
             this.logger.debug('跳过完全重复的补全内容');
             return null;
         }
 
-        // 获取上下文的最后一行
-        const lastContextLine = contextData.prefix.split('\n').pop()?.trim() || '';
-        // 获取补全内容的第一行
-        const firstCompletionLine = processedText.split('\n')[0].trim();
-
-        // 如果补全的第一行与上下文的最后一行完全相同，则只保留后续行
-        if (lastContextLine && firstCompletionLine === lastContextLine) {
-            const remainingLines = processedText.split('\n').slice(1);
-            if (remainingLines.length === 0) {
-                this.logger.debug('跳过完全重复的行');
-                return null;
-            }
-            processedText = remainingLines.join('\n');
-        }
-
-        // 检查补全内容是否与上一次相同，且不是来自缓存
-        if (!contextData.cacheHit && processedText === this.lastCompletionResult) {
-            this.logger.debug('跳过重复的补全内容');
-            return null;
-        }
-        
         return processedText;
     }
 

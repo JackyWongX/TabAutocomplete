@@ -204,9 +204,15 @@ async function activate(context) {
                 completionProvider.accept(completionProvider.lastShownCompletion.completionId);
             }
             else {
-                textEditor.edit((editBuilder) => {
-                    const position = textEditor.selection.active;
-                    editBuilder.insert(position, '\t');
+                // 执行 VS Code 的默认缩进操作
+                vscode.commands.executeCommand('editor.action.indentLines').then(() => {
+                    // 缩进操作成功
+                }, (error) => {
+                    console.error('Failed to execute default indent action:', error);
+                    textEditor.edit((editBuilder) => {
+                        const position = textEditor.selection.active;
+                        editBuilder.insert(position, '\t');
+                    });
                 });
             }
         });
@@ -781,27 +787,21 @@ class CompletionProvider {
         if (processedText.endsWith('```')) {
             processedText = processedText.substring(0, processedText.length - 3);
         }
-        // 如果补全文本与上下文完全相同，则跳过
-        if (processedText === contextData.prefix) {
-            this.logger.debug('跳过完全重复的补全内容');
-            return null;
+        let text = contextData.prefix + contextData.suffix;
+        const textlines = text.split('\n');
+        const processedTextlines = processedText.split('\n');
+        const textlinesset = new Set();
+        for (const line of textlines) {
+            textlinesset.add(line.trim());
         }
-        // 获取上下文的最后一行
-        const lastContextLine = contextData.prefix.split('\n').pop()?.trim() || '';
-        // 获取补全内容的第一行
-        const firstCompletionLine = processedText.split('\n')[0].trim();
-        // 如果补全的第一行与上下文的最后一行完全相同，则只保留后续行
-        if (lastContextLine && firstCompletionLine === lastContextLine) {
-            const remainingLines = processedText.split('\n').slice(1);
-            if (remainingLines.length === 0) {
-                this.logger.debug('跳过完全重复的行');
-                return null;
+        let findnum = 0;
+        for (const line of processedTextlines) {
+            if (textlinesset.has(line.trim())) {
+                findnum++;
             }
-            processedText = remainingLines.join('\n');
         }
-        // 检查补全内容是否与上一次相同，且不是来自缓存
-        if (!contextData.cacheHit && processedText === this.lastCompletionResult) {
-            this.logger.debug('跳过重复的补全内容');
+        if (findnum == processedTextlines.length) {
+            this.logger.debug('跳过完全重复的补全内容');
             return null;
         }
         return processedText;

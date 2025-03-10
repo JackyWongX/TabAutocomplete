@@ -228,9 +228,15 @@ export async function activate(context: vscode.ExtensionContext) {
                     completionProvider.accept(completionProvider.lastShownCompletion.completionId);
                 }
                 else{
-                    textEditor.edit((editBuilder) => {
-                        const position = textEditor.selection.active;
-                        editBuilder.insert(position, '\t');
+                    // 执行 VS Code 的默认缩进操作
+                    vscode.commands.executeCommand('editor.action.indentLines').then(() => {
+                        // 缩进操作成功
+                    }, (error) => {
+                        console.error('Failed to execute default indent action:', error);
+                        textEditor.edit((editBuilder) => {
+                            const position = textEditor.selection.active;
+                            editBuilder.insert(position, '\t');
+                        });
                     });
                 }
             }
