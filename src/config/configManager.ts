@@ -442,4 +442,19 @@ export class ConfigManager {
         this.logger.debug(`${enabled ? '启用' : '禁用'}自适应项目大小功能`);
         await this.updateConfigValue('advanced.adaptToProjectSize', enabled);
     }
+
+    /**
+     * 获取防抖延迟时间（毫秒）
+     */
+    public getDebounceDelay(): number {
+        return vscode.workspace.getConfiguration('tabAutoComplete').get('debounceDelay', 300);
+    }
+
+    /**
+     * 获取代码补全提示模板
+     */
+    public getPromptTemplate(): string {
+        return vscode.workspace.getConfiguration('tabAutoComplete').get('prompt.template', 
+            '你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。\n\n上下文:\n```\n${prefix}\n```\n\n请直接补全代码:');
+    }
 } 

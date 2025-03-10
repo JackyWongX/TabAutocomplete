@@ -1,6 +1,6 @@
 {
-  "name": "vscode-ollama-code-completion",
-  "displayName": "Ollama 代码补全",
+  "name": "tab-auto-complete",
+  "displayName": "TabAutoComplete",
   "description": "使用本地部署的Ollama模型进行智能代码补全",
   "version": "0.1.0",
   "engines": {
@@ -24,132 +24,132 @@
   "contributes": {
     "commands": [
       {
-        "command": "ollamaCodeCompletion.enable",
-        "title": "启用 Ollama 代码补全"
+        "command": "tabAutoComplete.enable",
+        "title": "启用 TabAutoComplete"
       },
       {
-        "command": "ollamaCodeCompletion.disable",
-        "title": "禁用 Ollama 代码补全"
+        "command": "tabAutoComplete.disable",
+        "title": "禁用 TabAutoComplete"
       },
       {
-        "command": "ollamaCodeCompletion.selectModel",
+        "command": "tabAutoComplete.selectModel",
         "title": "选择 Ollama 模型"
       },
       {
-        "command": "ollamaCodeCompletion.clearCache",
+        "command": "tabAutoComplete.clearCache",
         "title": "清除代码补全缓存"
       },
       {
-        "command": "ollamaCodeCompletion.testConnection",
+        "command": "tabAutoComplete.testConnection",
         "title": "测试 Ollama 连接"
       },
       {
-        "command": "ollamaCodeCompletion.showConfig",
+        "command": "tabAutoComplete.showConfig",
         "title": "显示当前配置"
       },
       {
-        "command": "ollamaCompletion.applyCompletion",
+        "command": "tabAutoComplete.applyCompletion",
         "title": "应用代码补全"
       },
       {
-        "command": "ollamaCompletion.applyCompletionForCompletionItem",
+        "command": "tabAutoComplete.applyCompletionForCompletionItem",
         "title": "应用补全项内容"
       },
       {
-        "command": "ollamaCompletion.acceptTabCompletion",
+        "command": "tabAutoComplete.acceptTabCompletion",
         "title": "接受Tab补全"
       },
       {
-        "command": "ollamaCompletion.handleEscape",
+        "command": "tabAutoComplete.handleEscape",
         "title": "处理ESC键"
       }
     ],
     "keybindings": [
       {
-        "command": "ollamaCompletion.applyCompletion",
+        "command": "tabAutoComplete.applyCompletion",
         "key": "alt+\\",
         "when": "editorTextFocus && !suggestWidgetVisible"
       },
       {
-        "command": "ollamaCompletion.acceptTabCompletion",
+        "command": "tabAutoComplete.acceptTabCompletion",
         "key": "tab",
         "when": "editorTextFocus && !editorReadonly && !inlineSuggestionVisible && !suggestWidgetVisible"
       },
       {
-        "command": "ollamaCompletion.handleEscape",
+        "command": "tabAutoComplete.handleEscape",
         "key": "escape",
         "when": "editorTextFocus"
       }
     ],
     "configuration": {
-      "title": "Ollama 代码补全",
+      "title": "TabAutoComplete",
       "properties": {
-        "ollamaCodeCompletion.general.enabled": {
+        "tabAutoComplete.general.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "启用或禁用 Ollama 代码补全功能"
+          "description": "启用或禁用 TabAutoComplete 功能"
         },
-        "ollamaCodeCompletion.general.triggerDelay": {
+        "tabAutoComplete.general.triggerDelay": {
           "type": "number",
           "default": 300,
           "description": "触发代码补全的延迟时间（毫秒）"
         },
-        "ollamaCodeCompletion.model.url": {
+        "tabAutoComplete.model.url": {
           "type": "string",
           "default": "http://localhost:11434",
           "description": "Ollama API 的 URL 地址"
         },
-        "ollamaCodeCompletion.model.name": {
+        "tabAutoComplete.model.name": {
           "type": "string",
           "default": "codellama:7b",
           "description": "使用的 Ollama 模型名称"
         },
-        "ollamaCodeCompletion.model.temperature": {
+        "tabAutoComplete.model.temperature": {
           "type": "number",
           "default": 0.3,
           "description": "模型生成的温度参数（0-1），较低值生成更确定性的结果"
         },
-        "ollamaCodeCompletion.model.maxTokens": {
+        "tabAutoComplete.model.maxTokens": {
           "type": "number",
           "default": 300,
           "description": "每次补全生成的最大 token 数"
         },
-        "ollamaCodeCompletion.context.maxLines": {
+        "tabAutoComplete.context.maxLines": {
           "type": "number",
           "default": 100,
           "description": "提供给模型的上下文最大行数"
         },
-        "ollamaCodeCompletion.context.includeImports": {
+        "tabAutoComplete.context.includeImports": {
           "type": "boolean",
           "default": true,
           "description": "是否在上下文中包含导入/引用语句"
         },
-        "ollamaCodeCompletion.context.includeComments": {
+        "tabAutoComplete.context.includeComments": {
           "type": "boolean",
           "default": true,
           "description": "是否在上下文中包含注释"
         },
-        "ollamaCodeCompletion.context.surroundingLines": {
+        "tabAutoComplete.context.surroundingLines": {
           "type": "number",
           "default": 5,
           "description": "按回车键触发补全时，包含当前行的上下文行数"
         },
-        "ollamaCodeCompletion.cache.enabled": {
+        "tabAutoComplete.cache.enabled": {
           "type": "boolean",
           "default": true,
           "description": "是否启用代码补全缓存"
         },
-        "ollamaCodeCompletion.cache.retentionPeriodHours": {
+        "tabAutoComplete.cache.retentionPeriodHours": {
           "type": "number",
           "default": 24,
           "description": "缓存保留时间（小时）"
         },
-        "ollamaCodeCompletion.cache.maxSnippets": {
+        "tabAutoComplete.cache.maxSnippets": {
           "type": "number",
           "default": 1000,
           "description": "最大缓存条目数"
         },
-        "ollamaCodeCompletion.fileTypes.enabled": {
+        "tabAutoComplete.fileTypes.enabled": {
           "type": "array",
           "default": [
             ".js",
@@ -160,7 +160,7 @@
           ],
           "description": "启用代码补全的文件类型（例如 .js, .py）"
         },
-        "ollamaCodeCompletion.fileTypes.disabled": {
+        "tabAutoComplete.fileTypes.disabled": {
           "type": "array",
           "default": [
             ".md",
@@ -168,12 +168,12 @@
           ],
           "description": "禁用代码补全的文件类型"
         },
-        "ollamaCodeCompletion.debug.enabled": {
+        "tabAutoComplete.debug.enabled": {
           "type": "boolean",
           "default": false,
           "description": "是否启用调试日志"
         },
-        "ollamaCodeCompletion.debug.logLevel": {
+        "tabAutoComplete.debug.logLevel": {
           "type": "string",
           "enum": [
             "debug",
@@ -185,15 +185,27 @@
           "default": "info",
           "description": "日志级别 (debug, info, warn, error, none)"
         },
-        "ollamaCodeCompletion.debug.logPerformance": {
+        "tabAutoComplete.debug.logPerformance": {
           "type": "boolean",
           "default": false,
           "description": "是否记录性能指标"
         },
-        "ollamaCodeCompletion.advanced.adaptToProjectSize": {
+        "tabAutoComplete.advanced.adaptToProjectSize": {
           "type": "boolean",
           "default": true,
           "description": "根据项目大小自动调整参数（温度、最大token数等）"
+        },
+        "tabAutoComplete.debounceDelay": {
+          "type": "number",
+          "default": 300,
+          "minimum": 100,
+          "maximum": 2000,
+          "description": "输入防抖延迟时间（毫秒）。在用户停止输入后等待多长时间才开始生成补全。"
+        },
+        "tabAutoComplete.prompt.template": {
+          "type": "string",
+          "default": "你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。\n\n上下文:\n```\n${prefix}\n```\n\n请直接补全代码:",
+          "description": "代码补全提示模板。可以使用 ${prefix} 作为上下文占位符。"
         }
       }
     }

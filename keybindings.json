@@ -1,7 +1,7 @@
 [
     {
         "key": "tab",
-        "command": "ollamaCompletion.acceptTabCompletion",
-        "when": "editorTextFocus && !editorReadonly && !editorTabMovesFocus && !inSnippetMode && !suggestWidgetVisible && !hasSnippetCompletions && !inlineSuggestionVisible"
+        "command": "tabAutoComplete.acceptTabCompletion",
+        "when": "editorTextFocus && !editorReadonly && !inlineSuggestionVisible && !suggestWidgetVisible"
     }
 ] 
