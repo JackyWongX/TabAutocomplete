@@ -32,8 +32,8 @@ const ollamaClient_1 = __webpack_require__(3);
 const configManager_1 = __webpack_require__(27);
 const cacheManager_1 = __webpack_require__(28);
 const statusBar_1 = __webpack_require__(33);
-const commands_1 = __webpack_require__(34);
 const logger_1 = __webpack_require__(4);
+const commands_1 = __webpack_require__(34);
 /**
  * 激活插件
  * @param context 扩展上下文
@@ -41,30 +41,15 @@ const logger_1 = __webpack_require__(4);
 async function activate(context) {
     // 初始化日志系统
     const logger = logger_1.Logger.getInstance();
-    logger.setLogLevel(logger_1.LogLevel.DEBUG); // 明确设置为DEBUG级别
-    logger.setDebugEnabled(true); // 开发阶段启用调试日志
-    logger.setPerformanceLoggingEnabled(true);
-    // 确保日志输出通道立即可见
-    logger.showOutputChannel();
-    logger.info('=====================================================');
-    logger.info('Ollama代码补全扩展激活开始');
-    logger.info(`扩展版本: ${vscode.extensions.getExtension('vscode-ollama-code-completion')?.packageJSON.version || '未知'}`);
-    logger.info(`VSCode版本: ${vscode.version}`);
-    logger.info(`操作系统: ${process.platform} ${process.arch}`);
-    logger.info(`Node版本: ${process.version}`);
-    logger.info('=====================================================');
     try {
         // 初始化配置管理器
         const configManager = new configManager_1.ConfigManager();
-        logger.info(`配置加载完成，API URL: ${configManager.getApiUrl()}, 模型: ${configManager.getModelName()}`);
         // 验证配置
         if (!configManager.getApiUrl()) {
-            logger.error('API URL未设置，请检查配置');
             vscode.window.showErrorMessage('Ollama API URL未设置，请在设置中配置。');
             return;
         }
         if (!configManager.getModelName()) {
-            logger.error('模型名称未设置，请检查配置');
             vscode.window.showErrorMessage('Ollama模型名称未设置，请在设置中配置。');
             return;
         }
@@ -73,13 +58,8 @@ async function activate(context) {
         // 初始化Ollama客户端
         const ollamaClient = new ollamaClient_1.OllamaClient(configManager);
         // 测试Ollama API连接
-        logger.info('测试Ollama API连接...');
         const connectionTest = await ollamaClient.testConnection();
-        if (connectionTest.success) {
-            logger.info(`Ollama API连接成功，可用模型: ${connectionTest.models?.join(', ')}`);
-        }
-        else {
-            logger.warn(`Ollama API连接失败: ${connectionTest.message}`);
+        if (!connectionTest.success) {
             vscode.window.showWarningMessage(`无法连接到Ollama API: ${connectionTest.message}。请检查配置并确保Ollama服务正在运行。`);
         }
         // 初始化状态栏
@@ -90,17 +70,13 @@ async function activate(context) {
         context.subscriptions.push(diagnosticsCollection);
         // 初始化补全提供程序
         const completionProvider = new completionProvider_1.CompletionProvider(configManager, logger, cacheManager, statusBar.getStatusBarItem(), diagnosticsCollection, context);
-        // 注册命令
-        const commandManager = new commands_1.CommandManager(context, configManager, ollamaClient, cacheManager, statusBar);
         // 注册补全提供程序
         const supportedLanguages = ['javascript', 'typescript', 'python', 'java', 'c', 'cpp', 'csharp', 'go', 'rust', 'php', 'ruby', 'html', 'css', 'markdown'];
-        logger.info(`为以下语言注册补全提供程序: ${supportedLanguages.join(', ')}`);
         // 确保为每种语言正确注册
         for (const language of supportedLanguages) {
             const selector = { language, scheme: 'file' };
             const provider = vscode.languages.registerCompletionItemProvider(selector, completionProvider, ...completionProvider.getTriggerCharacters());
             context.subscriptions.push(provider);
-            logger.debug(`已为语言 ${language} 注册补全提供程序`);
         }
         // 监听编辑器内容变化事件，实现内联预览功能
         let debounceTimer = null;
@@ -116,9 +92,11 @@ async function activate(context) {
             }
             // 检查输入的字符
             const inputChar = args.text;
+            logger.debug('输入字符', inputChar);
             // 过滤掉控制字符和特殊按键
             if (!isValidInputChar(inputChar)) {
                 await vscode.commands.executeCommand('default:type', args);
+                logger.debug('特殊字符不处理', inputChar);
                 return;
             }
             // 如果插件被禁用，直接执行默认输入
@@ -130,8 +108,8 @@ async function activate(context) {
             await vscode.commands.executeCommand('default:type', args);
             // 若又请求则取消
             completionProvider.cancel();
-            // 若又预览则清除
-            await completionProvider.clearPreview();
+            // 若有预览则清除
+            completionProvider.clearPreview();
             // 更新最后变更时间
             lastChangeTime = Date.now();
             // 清除之前的定时器
@@ -153,8 +131,6 @@ async function activate(context) {
                     }
                     // 标记开始处理补全
                     isProcessingCompletion = true;
-                    // 清除现有预览
-                    await completionProvider.clearPreview();
                     // 获取当前光标位置
                     const position = editor.selection.active;
                     // 创建取消令牌
@@ -209,7 +185,7 @@ async function activate(context) {
                 '~'
             ].includes(char);
             // 检查是否是空格或换行（作为特殊的触发字符）
-            const isSpecialTrigger = [' ', '\n', '\t'].includes(char);
+            const isSpecialTrigger = [' ', '\n'].includes(char);
             return isPrintable || isChineseChar || isCommonPunctuation || isSpecialTrigger;
         }
         // 监听按键事件，处理ESC键
@@ -219,36 +195,19 @@ async function activate(context) {
             }
             // 取消当前的补全请求
             completionProvider.cancel();
+            completionProvider.lastShownCompletion = null;
         });
         context.subscriptions.push(keyBindingListener);
-        // 注册Tab键接受补全的命令
-        context.subscriptions.push(vscode.commands.registerTextEditorCommand('tabAutoComplete.acceptTabCompletion', async () => {
-            try {
-                // 检查是否有活动预览
-                if (completionProvider.hasActivePreview()) {
-                    // 接受补全并触发新的补全
-                    await completionProvider.accept('tab-completion');
-                    // 获取当前编辑器和光标位置
-                    const editor = vscode.window.activeTextEditor;
-                    if (editor) {
-                        const position = editor.selection.active;
-                        // 触发新的补全
-                        await completionProvider.provideCompletionItems(editor.document, position, new vscode.CancellationTokenSource().token, { triggerKind: vscode.CompletionTriggerKind.Invoke });
-                    }
-                    return true; // 阻止默认的 Tab 行为
-                }
-                return false; // 允许默认的 Tab 行为
-            }
-            catch (error) {
-                logger.error('处理Tab补全时出错', error);
-                return false;
-            }
-        }));
         // 注册自动补全命令 - 修改为直接应用补全
-        const applyCompletionCommand = vscode.commands.registerTextEditorCommand('tabAutoComplete.applyCompletion', async (textEditor) => {
-            // 当用户手动触发时，接受当前显示的补全
-            if (textEditor && completionProvider.lastShownCompletion) {
-                await completionProvider.accept(completionProvider.lastShownCompletion.completionId);
+        const applyCompletionCommand = vscode.commands.registerTextEditorCommand('tabAutoComplete.applyCompletion', (textEditor) => {
+            if (configManager.isEnabled() && textEditor && completionProvider.lastShownCompletion) {
+                completionProvider.accept(completionProvider.lastShownCompletion.completionId);
+            }
+            else {
+                textEditor.edit((editBuilder) => {
+                    const position = textEditor.selection.active;
+                    editBuilder.insert(position, '\t');
+                });
             }
         });
         context.subscriptions.push(applyCompletionCommand);
@@ -261,10 +220,10 @@ async function activate(context) {
         context.subscriptions.push(logCompletionOutcomeCommand);
         // 标记补全提供程序为已注册
         completionProvider.setRegistered(true);
-        logger.info('补全提供程序注册完成');
+        // 注册命令
+        const commandManager = new commands_1.CommandManager(context, configManager, ollamaClient, cacheManager, statusBar);
         // 显示欢迎信息 - 修改消息内容，删除连续补全的描述
         //vscode.window.showInformationMessage('tabAutoComplete代码补全扩展已激活。');
-        logger.info('扩展激活完成');
     }
     catch (err) {
         logger.error('激活插件时发生错误', err);
@@ -293,7 +252,7 @@ function shouldCacheChanges(event, configManager) {
  * 停用插件
  */
 function deactivate() {
-    console.log('VSCode Ollama 代码补全插件已停用!');
+    // 不需要日志输出
 }
 exports.deactivate = deactivate;
 
@@ -420,7 +379,7 @@ class CompletionProvider {
             const terminal = vscode.window.createTerminal('Ollama');
             terminal.sendText(command);
             terminal.show();
-            this.logger.info('已尝试启动Ollama服务');
+            this.logger.debug('已尝试启动Ollama服务');
             vscode.window.showInformationMessage('正在尝试启动Ollama服务，请稍候...');
             // 等待几秒钟后测试连接
             setTimeout(async () => {
@@ -465,7 +424,7 @@ class CompletionProvider {
      * 接受补全
      */
     async accept(completionId) {
-        this.logger.debug(`接受补全: ${completionId}`);
+        this.logger.debug(`接受补全: ${completionId || '无ID'}`);
         try {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
@@ -502,6 +461,16 @@ class CompletionProvider {
             if (editor.document.isDirty) {
                 await editor.document.save();
             }
+            // 将接受的补全内容保存到缓存
+            if (this.configManager.isCacheEnabled() && this.lastContext && textToInsert) {
+                this.logger.debug('将已接受的补全内容保存到缓存');
+                try {
+                    await this.cacheManager.put(this.lastContext, textToInsert);
+                }
+                catch (error) {
+                    this.logger.debug(`保存补全内容到缓存时出错: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
             // 移动光标到插入内容的末尾
             const newPosition = new vscode.Position(this.originalPosition.line + lines.length - 1, lines[lines.length - 1].length + (lines.length === 1 ? this.originalPosition.character : 0));
             editor.selection = new vscode.Selection(newPosition, newPosition);
@@ -511,6 +480,7 @@ class CompletionProvider {
             this.lastPreviewPosition = null;
             this.lastPosition = null;
             this.originalPosition = null;
+            this.lastShownCompletion = null;
             this.logger.debug('补全内容已成功应用');
         }
         catch (error) {
@@ -599,12 +569,6 @@ class CompletionProvider {
         try {
             // 记录触发信息
             this.logger.debug(`触发补全，类型: ${context.triggerKind}, 字符: ${context.triggerCharacter || 'none'}`);
-            // 如果有活动的预览，先清除它
-            if (this.hasActivePreview()) {
-                this.logger.debug('清除现有预览');
-                await this.clearPreview();
-                return null;
-            }
             // 检查是否启用了代码补全
             if (!this.configManager.isEnabled()) {
                 this.logger.debug('代码补全功能已禁用，不提供补全');
@@ -764,25 +728,15 @@ class CompletionProvider {
             const item = new vscode.CompletionItem(completion.split('\n')[0] + '...', vscode.CompletionItemKind.Snippet);
             // 设置插入文本
             item.insertText = completion;
-            // 防止Tab键插入文本
-            item.keepWhitespace = true;
             // 设置详细信息
             item.detail = '基于上下文的AI补全';
             // 设置文档
             item.documentation = new vscode.MarkdownString('```' + document.languageId + '\n' + completion + '\n```');
             // 设置排序文本，确保我们的补全项排在前面
             item.sortText = '0';
-            // 设置为预选项，让用户可以直接按Tab选择
-            item.preselect = true;
-            // 设置命令
-            item.command = {
-                title: '应用代码补全',
-                command: 'tabAutoComplete.applyCompletion',
-                arguments: [completionId]
-            };
             // 更新状态栏
-            this.statusBarItem.text = "$(code) 补全";
-            this.statusBarItem.tooltip = "Ollama代码补全";
+            this.statusBarItem.text = "TabAutocomplete";
+            this.statusBarItem.tooltip = "TabAutocomplete代码补全";
             this.logger.debug('成功创建补全项，返回补全结果');
             // 设置预览
             await this.setPreview(completion, position);
@@ -794,8 +748,8 @@ class CompletionProvider {
             return null;
         }
         finally {
-            this.statusBarItem.text = "$(code) 补全";
-            this.statusBarItem.tooltip = "Ollama代码补全";
+            this.statusBarItem.text = "TabAutocomplete";
+            this.statusBarItem.tooltip = "TabAutocomplete代码补全";
         }
     }
     /**
@@ -804,7 +758,7 @@ class CompletionProvider {
     preparePrompt(contextData) {
         // 获取提示模板并替换占位符
         const template = this.configManager.getPromptTemplate();
-        return template.replace('${prefix}', contextData.prefix);
+        return template.replace('${prefix}', contextData.prefix + "TODO\n" + contextData.suffix + "\n从TODO这一行开始补全，不要返回上下文中重复的内容");
     }
     /**
      * 处理补全结果
@@ -859,16 +813,13 @@ class CompletionProvider {
         // 获取当前文件的内容
         const text = document.getText();
         const offset = document.offsetAt(position);
-        // 分割前缀和后缀
-        const prefix = text.substring(0, offset);
-        const suffix = text.substring(offset);
-        // 获取导入语句
-        const imports = this.getImportStatements(document);
         // 获取上下文行数
         const maxContextLines = this.configManager.getMaxContextLines();
-        // 获取前面的行
-        const lines = prefix.split('\n');
-        const contextLines = lines.slice(Math.max(0, lines.length - maxContextLines));
+        // 分割前缀和后缀
+        const prefix = text.substring(-maxContextLines, offset);
+        const suffix = text.substring(offset, maxContextLines);
+        // 获取导入语句
+        const imports = this.getImportStatements(document);
         // 构建上下文
         const context = {
             prefix,
@@ -877,8 +828,7 @@ class CompletionProvider {
             imports,
             language: document.languageId,
             lineCount: document.lineCount,
-            fileName: document.fileName,
-            contextLines: contextLines.join('\n')
+            fileName: document.fileName
         };
         return context;
     }
@@ -1082,6 +1032,9 @@ class CompletionProvider {
      * 清除预览
      */
     async clearPreview() {
+        if (this.lastDecorator == null) {
+            return;
+        }
         try {
             const editor = vscode.window.activeTextEditor;
             // 先清除装饰器
@@ -1107,6 +1060,7 @@ class CompletionProvider {
         this.lastPreviewPosition = null;
         this.lastPosition = null;
         this.originalPosition = null;
+        //this.lastShownCompletion = null;
     }
     /**
      * 设置预览
@@ -2042,15 +1996,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Logger = exports.LogLevel = void 0;
 const vscode = __importStar(__webpack_require__(1));
 /**
- * 日志级别
+ * 日志级别枚举
+ * 按照标准日志级别从低到高排序：DEBUG < INFO < WARN < ERROR
  */
 var LogLevel;
 (function (LogLevel) {
-    LogLevel[LogLevel["DEBUG"] = 0] = "DEBUG";
-    LogLevel[LogLevel["INFO"] = 1] = "INFO";
-    LogLevel[LogLevel["WARN"] = 2] = "WARN";
-    LogLevel[LogLevel["ERROR"] = 3] = "ERROR";
-    LogLevel[LogLevel["NONE"] = 4] = "NONE"; // 禁用日志
+    LogLevel[LogLevel["NONE"] = 0] = "NONE";
+    LogLevel[LogLevel["DEBUG"] = 1] = "DEBUG";
+    LogLevel[LogLevel["INFO"] = 2] = "INFO";
+    LogLevel[LogLevel["WARN"] = 3] = "WARN";
+    LogLevel[LogLevel["ERROR"] = 4] = "ERROR"; // 错误信息
 })(LogLevel = exports.LogLevel || (exports.LogLevel = {}));
 /**
  * 日志管理器
@@ -2058,11 +2013,9 @@ var LogLevel;
  */
 class Logger {
     constructor() {
-        this.logLevel = LogLevel.INFO;
+        this.logLevel = LogLevel.NONE;
         this.debugEnabled = false;
-        this.performanceLoggingEnabled = false;
-        this.outputChannel = vscode.window.createOutputChannel('Ollama Code Completion');
-        this.log(LogLevel.INFO, '日志系统初始化完成');
+        this.outputChannel = vscode.window.createOutputChannel('TabAutoComplete');
     }
     static getInstance() {
         if (!Logger.instance) {
@@ -2072,149 +2025,79 @@ class Logger {
     }
     setLogLevel(level) {
         this.logLevel = level;
-        this.log(LogLevel.INFO, `日志级别设置为: ${LogLevel[level]}`);
+        this.log(LogLevel.INFO, `日志级别已设置为: ${LogLevel[level]}`);
     }
-    setDebugEnabled(enabled) {
-        this.debugEnabled = enabled;
-        this.log(LogLevel.INFO, `调试模式: ${enabled ? '启用' : '禁用'}`);
+    shouldLog(level) {
+        if (level === LogLevel.DEBUG && this.debugEnabled) {
+            return true;
+        }
+        return this.logLevel !== LogLevel.NONE && level <= this.logLevel;
     }
-    setPerformanceLoggingEnabled(enabled) {
-        this.performanceLoggingEnabled = enabled;
-        this.log(LogLevel.INFO, `性能日志: ${enabled ? '启用' : '禁用'}`);
-    }
-    log(level, message, data) {
-        // 当调试模式启用时，总是输出DEBUG级别日志
-        if (level === LogLevel.DEBUG && !this.debugEnabled) {
-            return; // 不在调试模式且是DEBUG日志，不输出
-        }
-        // 按常规日志级别过滤
-        if (level < this.logLevel && level !== LogLevel.DEBUG) {
-            return;
-        }
-        // 获取调用堆栈信息
-        const stackTrace = new Error().stack || '';
-        const stackLines = stackTrace.split('\n');
-        // 找到调用log方法的文件和行号
-        // 通常第3行包含调用者信息 (0=Error, 1=log方法, 2=debug/info/warn/error方法, 3=实际调用者)
-        let callerInfo = '未知位置';
-        if (stackLines.length > 3) {
-            // 尝试从堆栈中提取文件名和行号
-            const callerLine = stackLines[3].trim();
-            const match = callerLine.match(/at .+\((.+):(\d+):(\d+)\)/) ||
-                callerLine.match(/at (.+):(\d+):(\d+)/);
-            if (match) {
-                const filePath = match[1];
-                const lineNumber = match[2];
-                // 只获取文件名，不要完整路径
-                const fileName = filePath.split(/[\/\\]/).pop() || filePath;
-                callerInfo = `${fileName}:${lineNumber}`;
-            }
-        }
+    formatMessage(level, message, data) {
         const timestamp = new Date().toISOString();
-        const levelString = LogLevel[level];
-        let logMessage = `${timestamp} ${levelString} [${callerInfo}]: ${message}`;
+        const levelStr = LogLevel[level].padEnd(5);
+        let formattedMessage = `[${timestamp}] [${levelStr}] ${message}`;
         if (data) {
             if (data instanceof Error) {
-                logMessage += `\n${data.stack || data.message}`;
+                formattedMessage += `\n    ${data.stack || data.message}`;
             }
             else if (typeof data === 'object') {
                 try {
-                    logMessage += `\n${JSON.stringify(data, null, 2)}`;
+                    formattedMessage += `\n    ${JSON.stringify(data, null, 2)}`;
                 }
                 catch (e) {
-                    logMessage += `\n[无法序列化对象: ${e}]`;
+                    formattedMessage += `\n    [无法序列化的对象]`;
                 }
             }
             else {
-                logMessage += `\n${data}`;
+                formattedMessage += `\n    ${data}`;
             }
         }
-        // 确保日志消息始终显示在输出通道中
-        this.outputChannel.appendLine(logMessage);
-        // 对于错误和警告，也在控制台中显示
-        if (level === LogLevel.ERROR) {
-            console.error(logMessage);
+        return formattedMessage;
+    }
+    log(level, message, data) {
+        if (level < this.logLevel) {
+            return;
         }
-        else if (level === LogLevel.WARN) {
-            console.warn(logMessage);
-        }
-        else if (level === LogLevel.DEBUG || level === LogLevel.INFO) {
-            console.log(logMessage);
+        if (this.shouldLog(level)) {
+            const formattedMessage = this.formatMessage(level, message, data);
+            this.outputChannel.appendLine(formattedMessage);
+            // 对于警告和错误，同时输出到控制台
+            if (level === LogLevel.ERROR) {
+                console.error(formattedMessage);
+            }
+            else if (level === LogLevel.WARN) {
+                console.warn(formattedMessage);
+            }
         }
     }
     debug(message, data) {
-        if (this.debugEnabled) {
-            this.log(LogLevel.DEBUG, message, data);
-        }
+        this.log(LogLevel.DEBUG, message, data);
     }
     info(message, data) {
         this.log(LogLevel.INFO, message, data);
     }
     warn(message, data) {
         this.log(LogLevel.WARN, message, data);
+        // 可选：显示警告通知
+        if (this.shouldLog(LogLevel.WARN)) {
+            vscode.window.showWarningMessage(message);
+        }
     }
-    /**
-     * 记录错误信息
-     * @param message 错误消息
-     * @param error 错误对象（可选）
-     */
     error(message, error) {
-        this.log(LogLevel.ERROR, message);
-        // 增强错误处理，确保捕获完整的错误信息
-        if (error) {
-            // 提取错误信息和堆栈
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            const errorStack = error instanceof Error ? error.stack : null;
-            // 记录基本错误信息
-            this.log(LogLevel.ERROR, `错误详情: ${errorMessage}`);
-            // 记录错误堆栈（如果有）
-            if (errorStack) {
-                this.log(LogLevel.ERROR, `错误堆栈:\n${errorStack}`);
-            }
-            // 如果错误对象包含其他有用信息，也记录下来
-            if (typeof error === 'object' && error !== null) {
-                try {
-                    // 尝试提取可能的额外属性（如HTTP状态码等）
-                    const extraProps = Object.keys(error)
-                        .filter(key => !['message', 'stack'].includes(key))
-                        .reduce((acc, key) => {
-                        try {
-                            const value = JSON.stringify(error[key]);
-                            return `${acc}${key}: ${value}, `;
-                        }
-                        catch {
-                            return `${acc}${key}: [无法序列化], `;
-                        }
-                    }, '');
-                    if (extraProps) {
-                        this.log(LogLevel.ERROR, `额外错误信息: ${extraProps}`);
-                    }
-                }
-                catch (e) {
-                    this.log(LogLevel.ERROR, `无法提取错误的额外属性: ${e}`);
-                }
-            }
-            // 记录当前调用堆栈，帮助定位问题源头
-            try {
-                throw new Error('调用堆栈追踪');
-            }
-            catch (stackTraceError) {
-                const stackTrace = stackTraceError instanceof Error ? stackTraceError.stack : null;
-                if (stackTrace) {
-                    // 跳过第一行（Error: 调用堆栈追踪）
-                    const stackLines = stackTrace.split('\n').slice(1).join('\n');
-                    this.log(LogLevel.ERROR, `调用位置:\n${stackLines}`);
-                }
-            }
-        }
+        this.log(LogLevel.ERROR, message, error);
+        // 始终显示错误通知
+        vscode.window.showErrorMessage(message);
     }
-    logPerformance(message, data) {
-        if (this.performanceLoggingEnabled) {
-            this.log(LogLevel.DEBUG, `[性能] ${message}`, data);
-        }
+    setDebugEnabled(enabled) {
+        this.debugEnabled = enabled;
+        this.log(LogLevel.INFO, `调试模式已${enabled ? '启用' : '禁用'}`);
     }
     showOutputChannel() {
         this.outputChannel.show();
+    }
+    dispose() {
+        this.outputChannel.dispose();
     }
 }
 exports.Logger = Logger;
@@ -2836,7 +2719,7 @@ const logger_1 = __webpack_require__(4);
 class ConfigManager {
     constructor() {
         // 配置前缀
-        this.configPrefix = 'ollamaCodeCompletion';
+        this.configPrefix = 'tabAutoComplete';
         // 缓存配置值
         this.cachedConfig = {
             enabled: true,
@@ -2845,8 +2728,7 @@ class ConfigManager {
             modelName: 'qwen2.5-coder:1.5b',
             temperature: 0.3,
             maxTokens: 300,
-            maxContextLines: 100,
-            surroundingLines: 5,
+            maxContextLines: 2000,
             includeImports: true,
             includeComments: true,
             cacheEnabled: true,
@@ -2854,21 +2736,25 @@ class ConfigManager {
             maxSnippets: 1000,
             enabledFileTypes: ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*'],
             disabledFileTypes: ['.txt', '.log', '.json', '.yml', '.yaml'],
-            debugEnabled: false,
-            logLevel: 'info',
-            logPerformance: false,
+            logLevel: logger_1.LogLevel.ERROR,
             adaptToProjectSize: true
         };
         this.logger = logger_1.Logger.getInstance();
         // 在构造函数中加载配置
         this.loadConfiguration();
+        // 监听配置变更
+        this.configChangeListener = vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration(this.configPrefix)) {
+                this.loadConfiguration();
+            }
+        });
         this.logger.debug('ConfigManager初始化完成');
     }
     /**
      * 加载配置
      */
     loadConfiguration() {
-        const config = vscode.workspace.getConfiguration('ollamaCodeCompletion');
+        const config = vscode.workspace.getConfiguration(this.configPrefix);
         // 加载通用设置
         this.cachedConfig.enabled = config.get('general.enabled', true);
         this.cachedConfig.triggerDelay = config.get('general.triggerDelay', 300);
@@ -2879,7 +2765,6 @@ class ConfigManager {
         this.cachedConfig.maxTokens = config.get('model.maxTokens', 300);
         // 上下文设置
         this.cachedConfig.maxContextLines = config.get('context.maxLines', 100);
-        this.cachedConfig.surroundingLines = config.get('context.surroundingLines', 5);
         this.cachedConfig.includeImports = config.get('context.includeImports', true);
         this.cachedConfig.includeComments = config.get('context.includeComments', true);
         // 缓存设置
@@ -2889,14 +2774,47 @@ class ConfigManager {
         // 文件类型设置
         this.cachedConfig.enabledFileTypes = config.get('fileTypes.enabled', ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*']);
         this.cachedConfig.disabledFileTypes = config.get('fileTypes.disabled', ['.txt', '.log', '.json', '.yml', '.yaml']);
-        // 调试设置
-        this.cachedConfig.debugEnabled = config.get('debug.enabled', false);
-        this.cachedConfig.logLevel = config.get('debug.logLevel', 'info');
-        this.cachedConfig.logPerformance = config.get('debug.logPerformance', false);
+        // 日志设置
+        const logLevelStr = config.get('logging.level', 'error');
+        this.cachedConfig.logLevel = this.parseLogLevel(logLevelStr);
+        // 高级设置
         this.cachedConfig.adaptToProjectSize = config.get('advanced.adaptToProjectSize', true);
-        this.logger.debug(`配置已加载: API URL=${this.cachedConfig.apiUrl}, 模型=${this.cachedConfig.modelName}, 温度=${this.cachedConfig.temperature}, 最大令牌数=${this.cachedConfig.maxTokens}`);
-        this.logger.debug(`缓存配置: 启用=${this.cachedConfig.cacheEnabled}, 保留时间=${this.cachedConfig.retentionPeriodHours}小时, 最大片段数=${this.cachedConfig.maxSnippets}`);
-        this.logger.debug(`文件类型配置: 启用=${this.cachedConfig.enabledFileTypes.join(',')}, 禁用=${this.cachedConfig.disabledFileTypes.join(',')}`);
+        // 更新Logger的日志级别
+        this.logger.setLogLevel(this.cachedConfig.logLevel);
+        this.logger.debug('配置已重新加载');
+    }
+    /**
+     * 将字符串转换为LogLevel枚举
+     */
+    parseLogLevel(level) {
+        switch (level.toLowerCase()) {
+            case 'debug':
+                return logger_1.LogLevel.DEBUG;
+            case 'info':
+                return logger_1.LogLevel.INFO;
+            case 'warn':
+                return logger_1.LogLevel.WARN;
+            case 'error':
+                return logger_1.LogLevel.ERROR;
+            case 'none':
+                return logger_1.LogLevel.NONE;
+            default:
+                return logger_1.LogLevel.ERROR;
+        }
+    }
+    /**
+     * 获取日志级别
+     */
+    getLogLevel() {
+        return this.cachedConfig.logLevel;
+    }
+    /**
+     * 设置日志级别
+     */
+    async setLogLevel(level) {
+        const levelStr = logger_1.LogLevel[level].toLowerCase();
+        await this.updateConfigValue('logging.level', levelStr);
+        this.logger.setLogLevel(level);
     }
     /**
      * 重新加载配置
@@ -2994,12 +2912,6 @@ class ConfigManager {
      */
     getMaxContextLines() {
         return this.cachedConfig.maxContextLines;
-    }
-    /**
-     * 获取回车触发补全时的上下文行数
-     */
-    getSurroundingLines() {
-        return this.cachedConfig.surroundingLines;
     }
     /**
      * 是否包含导入语句
@@ -3129,31 +3041,7 @@ class ConfigManager {
      * 是否启用调试日志
      */
     isDebugEnabled() {
-        return this.cachedConfig.debugEnabled;
-    }
-    /**
-     * 获取日志级别
-     */
-    getLogLevel() {
-        return this.cachedConfig.logLevel;
-    }
-    /**
-     * 是否记录性能指标
-     */
-    shouldLogPerformance() {
-        return this.cachedConfig.logPerformance;
-    }
-    /**
-     * 启用调试模式
-     */
-    async setDebugEnabled(enabled) {
-        await this.updateConfigValue('debug.enabled', enabled);
-    }
-    /**
-     * 设置日志级别
-     */
-    async setLogLevel(level) {
-        await this.updateConfigValue('debug.logLevel', level);
+        return this.getLogLevel() === logger_1.LogLevel.DEBUG;
     }
     /**
      * 是否应根据项目大小自适应调整参数
@@ -3209,6 +3097,11 @@ class ConfigManager {
      */
     getPromptTemplate() {
         return vscode.workspace.getConfiguration('tabAutoComplete').get('prompt.template', '你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。\n\n上下文:\n```\n${prefix}\n```\n\n请直接补全代码:');
+    }
+    dispose() {
+        if (this.configChangeListener) {
+            this.configChangeListener.dispose();
+        }
     }
 }
 exports.ConfigManager = ConfigManager;
@@ -3278,7 +3171,7 @@ class CacheManager {
             for (const snippet of this.codeSnippets) {
                 this.lruCache.set(snippet.id, snippet);
             }
-            this.logger.info(`已加载 ${this.codeSnippets.length} 个缓存的代码片段`);
+            this.logger.debug(`已加载 ${this.codeSnippets.length} 个缓存的代码片段`);
             // 清理过期的缓存
             this.cleanExpiredCache();
         }
@@ -3304,7 +3197,7 @@ class CacheManager {
             return !isExpired;
         });
         if (expiredCount > 0) {
-            this.logger.info(`已清理 ${expiredCount} 个过期的缓存片段`);
+            this.logger.debug(`已清理 ${expiredCount} 个过期的缓存片段`);
             this.saveCache();
         }
     }
@@ -3613,7 +3506,7 @@ class CacheManager {
      * 清空缓存
      */
     clearCache() {
-        this.logger.info('清空所有缓存的代码片段');
+        this.logger.debug('清空所有缓存的代码片段');
         this.codeSnippets = [];
         this.lruCache.reset();
         this.saveCache();
@@ -4681,8 +4574,8 @@ class StatusBarManager {
      */
     updateStatus() {
         const isEnabled = this.configManager.isEnabled();
-        this.statusBarItem.text = isEnabled ? '$(sparkle) Ollama' : '$(stop) Ollama';
-        this.statusBarItem.tooltip = isEnabled ? 'Ollama代码补全已启用 (点击禁用)' : 'Ollama代码补全已禁用 (点击启用)';
+        this.statusBarItem.text = isEnabled ? '$(sparkle) TabAutoComplete' : '$(stop) TabAutoComplete';
+        this.statusBarItem.tooltip = isEnabled ? 'TabAutoComplete已启用 (点击禁用)' : 'TabAutoComplete已禁用 (点击启用)';
     }
     /**
      * 获取状态栏项
@@ -4716,8 +4609,8 @@ class StatusBarManager {
      */
     showRequestInProgress(show) {
         if (show) {
-            this.statusBarItem.text = `$(sync~spin) Ollama 请求中...`;
-            this.statusBarItem.tooltip = '正在向Ollama服务发送请求';
+            this.statusBarItem.text = `$(sync~spin) TabAutoComplete 请求中...`;
+            this.statusBarItem.tooltip = '正在发送请求';
         }
         else {
             this.updateStatus(); // 恢复正常状态
@@ -4728,7 +4621,7 @@ class StatusBarManager {
      * @param errorMessage 错误消息
      */
     showError(errorMessage) {
-        this.statusBarItem.text = `$(error) Ollama 错误`;
+        this.statusBarItem.text = `$(error) TabAutoComplete 错误`;
         this.statusBarItem.tooltip = errorMessage;
         this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
         // 5秒后恢复正常状态
@@ -4745,8 +4638,8 @@ class StatusBarManager {
         this.updateStatus();
         // 显示通知
         vscode.window.showInformationMessage(isCurrentlyEnabled
-            ? 'Ollama 代码补全已禁用'
-            : 'Ollama 代码补全已启用');
+            ? 'TabAutoComplete已禁用'
+            : 'TabAutoComplete已启用');
     }
     /**
      * 释放资源

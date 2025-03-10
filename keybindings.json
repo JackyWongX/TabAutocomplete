@@ -1,7 +1,0 @@
-[
-    {
-        "key": "tab",
-        "command": "tabAutoComplete.acceptTabCompletion",
-        "when": "editorTextFocus && !editorReadonly && !inlineSuggestionVisible && !suggestWidgetVisible"
-    }
-] 

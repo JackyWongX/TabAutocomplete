@@ -52,14 +52,6 @@
         "title": "应用代码补全"
       },
       {
-        "command": "tabAutoComplete.applyCompletionForCompletionItem",
-        "title": "应用补全项内容"
-      },
-      {
-        "command": "tabAutoComplete.acceptTabCompletion",
-        "title": "接受Tab补全"
-      },
-      {
         "command": "tabAutoComplete.handleEscape",
         "title": "处理ESC键"
       }
@@ -67,13 +59,8 @@
     "keybindings": [
       {
         "command": "tabAutoComplete.applyCompletion",
-        "key": "alt+\\",
-        "when": "editorTextFocus && !suggestWidgetVisible"
-      },
-      {
-        "command": "tabAutoComplete.acceptTabCompletion",
         "key": "tab",
-        "when": "editorTextFocus && !editorReadonly && !inlineSuggestionVisible && !suggestWidgetVisible && hasActivePreview"
+        "when": "editorTextFocus"
       },
       {
         "command": "tabAutoComplete.handleEscape",
@@ -129,10 +116,11 @@
           "default": true,
           "description": "是否在上下文中包含注释"
         },
-        "tabAutoComplete.context.surroundingLines": {
-          "type": "number",
-          "default": 5,
-          "description": "按回车键触发补全时，包含当前行的上下文行数"
+        "tabAutoComplete.logging.level": {
+          "type": "string",
+          "enum": ["none", "debug", "info", "warn", "error"],
+          "default": "debug",
+          "description": "日志级别：none - 不显示日志，debug - 调试信息，info - 一般信息，warn - 警告信息，error - 错误信息"
         },
         "tabAutoComplete.cache.enabled": {
           "type": "boolean",

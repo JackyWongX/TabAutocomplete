@@ -114,7 +114,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             terminal.sendText(command);
             terminal.show();
             
-            this.logger.info('已尝试启动Ollama服务');
+            this.logger.debug('已尝试启动Ollama服务');
             vscode.window.showInformationMessage('正在尝试启动Ollama服务，请稍候...');
             
             // 等待几秒钟后测试连接
@@ -161,8 +161,8 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
     /**
      * 接受补全
      */
-    public async accept(completionId: string): Promise<void> {
-        this.logger.debug(`接受补全: ${completionId}`);
+    public async accept(completionId?: string): Promise<void> {
+        this.logger.debug(`接受补全: ${completionId || '无ID'}`);
         
         try {
             const editor = vscode.window.activeTextEditor;
@@ -211,6 +211,16 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                 await editor.document.save();
             }
 
+            // 将接受的补全内容保存到缓存
+            if (this.configManager.isCacheEnabled() && this.lastContext && textToInsert) {
+                this.logger.debug('将已接受的补全内容保存到缓存');
+                try {
+                    await this.cacheManager.put(this.lastContext, textToInsert);
+                } catch (error) {
+                    this.logger.debug(`保存补全内容到缓存时出错: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+
             // 移动光标到插入内容的末尾
             const newPosition = new vscode.Position(
                 this.originalPosition.line + lines.length - 1,
@@ -224,6 +234,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             this.lastPreviewPosition = null;
             this.lastPosition = null;
             this.originalPosition = null;
+            this.lastShownCompletion = null;
 
             this.logger.debug('补全内容已成功应用');
         } catch (error) {
@@ -328,13 +339,6 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         try {
             // 记录触发信息
             this.logger.debug(`触发补全，类型: ${context.triggerKind}, 字符: ${context.triggerCharacter || 'none'}`);
-
-            // 如果有活动的预览，先清除它
-            if (this.hasActivePreview()) {
-                this.logger.debug('清除现有预览');
-                await this.clearPreview();
-                return null;
-            }
 
             // 检查是否启用了代码补全
             if (!this.configManager.isEnabled()) {
@@ -521,9 +525,6 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             // 设置插入文本
             item.insertText = completion;
             
-            // 防止Tab键插入文本
-            item.keepWhitespace = true;
-            
             // 设置详细信息
             item.detail = '基于上下文的AI补全';
             
@@ -535,19 +536,9 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             // 设置排序文本，确保我们的补全项排在前面
             item.sortText = '0';
             
-            // 设置为预选项，让用户可以直接按Tab选择
-            item.preselect = true;
-            
-            // 设置命令
-            item.command = {
-                title: '应用代码补全',
-                command: 'tabAutoComplete.applyCompletion',
-                arguments: [completionId]
-            };
-            
             // 更新状态栏
-            this.statusBarItem.text = "$(code) 补全";
-            this.statusBarItem.tooltip = "Ollama代码补全";
+            this.statusBarItem.text = "TabAutocomplete";
+            this.statusBarItem.tooltip = "TabAutocomplete代码补全";
             this.logger.debug('成功创建补全项，返回补全结果');
 
             // 设置预览
@@ -559,8 +550,8 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             this.onError(error);
             return null;
         } finally {
-            this.statusBarItem.text = "$(code) 补全";
-            this.statusBarItem.tooltip = "Ollama代码补全";
+            this.statusBarItem.text = "TabAutocomplete";
+            this.statusBarItem.tooltip = "TabAutocomplete代码补全";
         }
     }
 
@@ -570,7 +561,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
     private preparePrompt(contextData: any): string {
         // 获取提示模板并替换占位符
         const template = this.configManager.getPromptTemplate();
-        return template.replace('${prefix}', contextData.prefix);
+        return template.replace('${prefix}', contextData.prefix+"TODO\n"+contextData.suffix+"\n从TODO这一行开始补全，不要返回上下文中重复的内容");
     }
 
     /**
@@ -636,19 +627,15 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         const text = document.getText();
         const offset = document.offsetAt(position);
         
+        // 获取上下文行数
+        const maxContextLines = this.configManager.getMaxContextLines();
+
         // 分割前缀和后缀
-        const prefix = text.substring(0, offset);
-        const suffix = text.substring(offset);
+        const prefix = text.substring(-maxContextLines, offset);
+        const suffix = text.substring(offset,maxContextLines);
         
         // 获取导入语句
         const imports = this.getImportStatements(document);
-        
-        // 获取上下文行数
-        const maxContextLines = this.configManager.getMaxContextLines();
-        
-        // 获取前面的行
-        const lines = prefix.split('\n');
-        const contextLines = lines.slice(Math.max(0, lines.length - maxContextLines));
         
         // 构建上下文
         const context = {
@@ -658,8 +645,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             imports,
             language: document.languageId,
             lineCount: document.lineCount,
-            fileName: document.fileName,
-            contextLines: contextLines.join('\n')
+            fileName: document.fileName
         };
         
         return context;
@@ -894,6 +880,10 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
      * 清除预览
      */
     public async clearPreview(): Promise<void> {
+        if(this.lastDecorator == null){
+            return;
+        }
+
         try {
             const editor = vscode.window.activeTextEditor;
             
@@ -925,6 +915,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         this.lastPreviewPosition = null;
         this.lastPosition = null;
         this.originalPosition = null;
+        //this.lastShownCompletion = null;
     }
 
     /**

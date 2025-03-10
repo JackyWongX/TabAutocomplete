@@ -63,7 +63,7 @@ export class CacheManager {
                 this.lruCache.set(snippet.id, snippet);
             }
             
-            this.logger.info(`已加载 ${this.codeSnippets.length} 个缓存的代码片段`);
+            this.logger.debug(`已加载 ${this.codeSnippets.length} 个缓存的代码片段`);
             
             // 清理过期的缓存
             this.cleanExpiredCache();
@@ -92,7 +92,7 @@ export class CacheManager {
         });
         
         if (expiredCount > 0) {
-            this.logger.info(`已清理 ${expiredCount} 个过期的缓存片段`);
+            this.logger.debug(`已清理 ${expiredCount} 个过期的缓存片段`);
             this.saveCache();
         }
     }
@@ -473,7 +473,7 @@ export class CacheManager {
      * 清空缓存
      */
     public clearCache(): void {
-        this.logger.info('清空所有缓存的代码片段');
+        this.logger.debug('清空所有缓存的代码片段');
         this.codeSnippets = [];
         this.lruCache.reset();
         this.saveCache();

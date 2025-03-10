@@ -4,8 +4,8 @@ import { OllamaClient } from './api/ollamaClient';
 import { ConfigManager } from './config/configManager';
 import { CacheManager } from './cache/cacheManager';
 import { StatusBarManager } from './ui/statusBar';
-import { CommandManager } from './ui/commands';
 import { Logger, LogLevel } from './utils/logger';
+import { CommandManager } from './ui/commands';
 
 /**
  * 激活插件
@@ -59,16 +59,7 @@ export async function activate(context: vscode.ExtensionContext) {
             diagnosticsCollection,
             context
         );
-        
-        // 注册命令
-        const commandManager = new CommandManager(
-            context,
-            configManager,
-            ollamaClient,
-            cacheManager,
-            statusBar
-        );
-        
+
         // 注册补全提供程序
         const supportedLanguages = ['javascript', 'typescript', 'python', 'java', 'c', 'cpp', 'csharp', 'go', 'rust', 'php', 'ruby', 'html', 'css', 'markdown'];
         
@@ -99,10 +90,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // 检查输入的字符
             const inputChar = args.text;
-            
+            logger.debug('输入字符', inputChar);
+  
             // 过滤掉控制字符和特殊按键
             if (!isValidInputChar(inputChar)) {
                 await vscode.commands.executeCommand('default:type', args);
+                logger.debug('特殊字符不处理', inputChar);
                 return;
             }
 
@@ -118,8 +111,8 @@ export async function activate(context: vscode.ExtensionContext) {
             // 若又请求则取消
             completionProvider.cancel();
 
-            // 若又预览则清除
-            await completionProvider.clearPreview();
+            // 若有预览则清除
+            completionProvider.clearPreview();
 
             // 更新最后变更时间
             lastChangeTime = Date.now();
@@ -146,9 +139,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
                     // 标记开始处理补全
                     isProcessingCompletion = true;
-
-                    // 清除现有预览
-                    await completionProvider.clearPreview();
 
                     // 获取当前光标位置
                     const position = editor.selection.active;
@@ -215,7 +205,7 @@ export async function activate(context: vscode.ExtensionContext) {
             ].includes(char);
 
             // 检查是否是空格或换行（作为特殊的触发字符）
-            const isSpecialTrigger = [' ', '\n', '\t'].includes(char);
+            const isSpecialTrigger = [' ', '\n'].includes(char);
 
             return isPrintable || isChineseChar || isCommonPunctuation || isSpecialTrigger;
         }
@@ -227,46 +217,21 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             // 取消当前的补全请求
             completionProvider.cancel();
+            completionProvider.lastShownCompletion = null;
         });
         context.subscriptions.push(keyBindingListener);
-
-        // 注册Tab键接受补全的命令
-        context.subscriptions.push(
-            vscode.commands.registerTextEditorCommand('tabAutoComplete.acceptTabCompletion', async () => {
-                try {
-                    // 检查是否有活动预览
-                    if (completionProvider.hasActivePreview()) {
-                        // 接受补全并触发新的补全
-                        await completionProvider.accept('tab-completion');
-                        // 获取当前编辑器和光标位置
-                        const editor = vscode.window.activeTextEditor;
-                        if (editor) {
-                            const position = editor.selection.active;
-                            // 触发新的补全
-                            await completionProvider.provideCompletionItems(
-                                editor.document,
-                                position,
-                                new vscode.CancellationTokenSource().token,
-                                { triggerKind: vscode.CompletionTriggerKind.Invoke }
-                            );
-                        }
-                        return true; // 阻止默认的 Tab 行为
-                    }
-                    return false; // 允许默认的 Tab 行为
-                } catch (error) {
-                    logger.error('处理Tab补全时出错', error);
-                    return false;
-                }
-            })
-        );
         
         // 注册自动补全命令 - 修改为直接应用补全
-        const applyCompletionCommand = vscode.commands.registerTextEditorCommand(
-            'tabAutoComplete.applyCompletion',
-            async (textEditor: vscode.TextEditor) => {
-                // 当用户手动触发时，接受当前显示的补全
-                if (textEditor && completionProvider.lastShownCompletion) {
-                    await completionProvider.accept(completionProvider.lastShownCompletion.completionId);
+        const applyCompletionCommand = vscode.commands.registerTextEditorCommand('tabAutoComplete.applyCompletion',
+            (textEditor: vscode.TextEditor) => {
+                if (configManager.isEnabled() && textEditor && completionProvider.lastShownCompletion) {
+                    completionProvider.accept(completionProvider.lastShownCompletion.completionId);
+                }
+                else{
+                    textEditor.edit((editBuilder) => {
+                        const position = textEditor.selection.active;
+                        editBuilder.insert(position, '\t');
+                    });
                 }
             }
         );
@@ -285,7 +250,16 @@ export async function activate(context: vscode.ExtensionContext) {
         
         // 标记补全提供程序为已注册
         completionProvider.setRegistered(true);
-        
+
+        // 注册命令
+        const commandManager = new CommandManager(
+            context,
+            configManager,
+            ollamaClient,
+            cacheManager,
+            statusBar
+        );
+
         // 显示欢迎信息 - 修改消息内容，删除连续补全的描述
         //vscode.window.showInformationMessage('tabAutoComplete代码补全扩展已激活。');
         

@@ -30,8 +30,8 @@ export class StatusBarManager {
      */
     public updateStatus(): void {
         const isEnabled = this.configManager.isEnabled();
-        this.statusBarItem.text = isEnabled ? '$(sparkle) Ollama' : '$(stop) Ollama';
-        this.statusBarItem.tooltip = isEnabled ? 'Ollama代码补全已启用 (点击禁用)' : 'Ollama代码补全已禁用 (点击启用)';
+        this.statusBarItem.text = isEnabled ? '$(sparkle) TabAutoComplete' : '$(stop) TabAutoComplete';
+        this.statusBarItem.tooltip = isEnabled ? 'TabAutoComplete已启用 (点击禁用)' : 'TabAutoComplete已禁用 (点击启用)';
     }
     
     /**
@@ -70,8 +70,8 @@ export class StatusBarManager {
      */
     public showRequestInProgress(show: boolean): void {
         if (show) {
-            this.statusBarItem.text = `$(sync~spin) Ollama 请求中...`;
-            this.statusBarItem.tooltip = '正在向Ollama服务发送请求';
+            this.statusBarItem.text = `$(sync~spin) TabAutoComplete 请求中...`;
+            this.statusBarItem.tooltip = '正在发送请求';
         } else {
             this.updateStatus(); // 恢复正常状态
         }
@@ -82,7 +82,7 @@ export class StatusBarManager {
      * @param errorMessage 错误消息
      */
     public showError(errorMessage: string): void {
-        this.statusBarItem.text = `$(error) Ollama 错误`;
+        this.statusBarItem.text = `$(error) TabAutoComplete 错误`;
         this.statusBarItem.tooltip = errorMessage;
         this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
         
@@ -103,8 +103,8 @@ export class StatusBarManager {
         // 显示通知
         vscode.window.showInformationMessage(
             isCurrentlyEnabled 
-                ? 'Ollama 代码补全已禁用' 
-                : 'Ollama 代码补全已启用'
+                ? 'TabAutoComplete已禁用' 
+                : 'TabAutoComplete已启用'
         );
     }
     

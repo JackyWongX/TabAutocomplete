@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Logger } from '../utils/logger';
+import { Logger, LogLevel } from '../utils/logger';
 
 /**
  * 配置管理器
@@ -7,7 +7,7 @@ import { Logger } from '../utils/logger';
  */
 export class ConfigManager {
     // 配置前缀
-    private readonly configPrefix = 'ollamaCodeCompletion';
+    private readonly configPrefix = 'tabAutoComplete';
     
     // 缓存配置值
     private cachedConfig: {
@@ -18,7 +18,6 @@ export class ConfigManager {
         temperature: number;
         maxTokens: number;
         maxContextLines: number;
-        surroundingLines: number;
         includeImports: boolean;
         includeComments: boolean;
         cacheEnabled: boolean;
@@ -26,9 +25,7 @@ export class ConfigManager {
         maxSnippets: number;
         enabledFileTypes: string[] | string;
         disabledFileTypes: string[] | string;
-        debugEnabled: boolean;
-        logLevel: string;
-        logPerformance: boolean;
+        logLevel: LogLevel;
         adaptToProjectSize: boolean;
     } = {
         enabled: true,
@@ -37,8 +34,7 @@ export class ConfigManager {
         modelName: 'qwen2.5-coder:1.5b',
         temperature: 0.3,
         maxTokens: 300,
-        maxContextLines: 100,
-        surroundingLines: 5,
+        maxContextLines: 2000,
         includeImports: true,
         includeComments: true,
         cacheEnabled: true,
@@ -46,18 +42,25 @@ export class ConfigManager {
         maxSnippets: 1000,
         enabledFileTypes: ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*'],
         disabledFileTypes: ['.txt', '.log', '.json', '.yml', '.yaml'],
-        debugEnabled: false,
-        logLevel: 'info',
-        logPerformance: false,
+        logLevel: LogLevel.ERROR,
         adaptToProjectSize: true
     };
     
     private logger: Logger;
+    private configChangeListener: vscode.Disposable;
     
     constructor() {
         this.logger = Logger.getInstance();
         // 在构造函数中加载配置
         this.loadConfiguration();
+        
+        // 监听配置变更
+        this.configChangeListener = vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration(this.configPrefix)) {
+                this.loadConfiguration();
+            }
+        });
+        
         this.logger.debug('ConfigManager初始化完成');
     }
     
@@ -65,7 +68,7 @@ export class ConfigManager {
      * 加载配置
      */
     private loadConfiguration(): void {
-        const config = vscode.workspace.getConfiguration('ollamaCodeCompletion');
+        const config = vscode.workspace.getConfiguration(this.configPrefix);
         
         // 加载通用设置
         this.cachedConfig.enabled = config.get<boolean>('general.enabled', true);
@@ -79,7 +82,6 @@ export class ConfigManager {
         
         // 上下文设置
         this.cachedConfig.maxContextLines = config.get<number>('context.maxLines', 100);
-        this.cachedConfig.surroundingLines = config.get<number>('context.surroundingLines', 5);
         this.cachedConfig.includeImports = config.get<boolean>('context.includeImports', true);
         this.cachedConfig.includeComments = config.get<boolean>('context.includeComments', true);
         
@@ -92,16 +94,53 @@ export class ConfigManager {
         this.cachedConfig.enabledFileTypes = config.get<string[]>('fileTypes.enabled', ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*']);
         this.cachedConfig.disabledFileTypes = config.get<string[]>('fileTypes.disabled', ['.txt', '.log', '.json', '.yml', '.yaml']);
         
-        // 调试设置
-        this.cachedConfig.debugEnabled = config.get<boolean>('debug.enabled', false);
-        this.cachedConfig.logLevel = config.get<string>('debug.logLevel', 'info');
-        this.cachedConfig.logPerformance = config.get<boolean>('debug.logPerformance', false);
+        // 日志设置
+        const logLevelStr = config.get<string>('logging.level', 'error');
+        this.cachedConfig.logLevel = this.parseLogLevel(logLevelStr);
         
+        // 高级设置
         this.cachedConfig.adaptToProjectSize = config.get<boolean>('advanced.adaptToProjectSize', true);
         
-        this.logger.debug(`配置已加载: API URL=${this.cachedConfig.apiUrl}, 模型=${this.cachedConfig.modelName}, 温度=${this.cachedConfig.temperature}, 最大令牌数=${this.cachedConfig.maxTokens}`);
-        this.logger.debug(`缓存配置: 启用=${this.cachedConfig.cacheEnabled}, 保留时间=${this.cachedConfig.retentionPeriodHours}小时, 最大片段数=${this.cachedConfig.maxSnippets}`);
-        this.logger.debug(`文件类型配置: 启用=${this.cachedConfig.enabledFileTypes.join(',')}, 禁用=${this.cachedConfig.disabledFileTypes.join(',')}`);
+        // 更新Logger的日志级别
+        this.logger.setLogLevel(this.cachedConfig.logLevel);
+        
+        this.logger.debug('配置已重新加载');
+    }
+    
+    /**
+     * 将字符串转换为LogLevel枚举
+     */
+    private parseLogLevel(level: string): LogLevel {
+        switch (level.toLowerCase()) {
+            case 'debug':
+                return LogLevel.DEBUG;
+            case 'info':
+                return LogLevel.INFO;
+            case 'warn':
+                return LogLevel.WARN;
+            case 'error':
+                return LogLevel.ERROR;
+            case 'none':
+                return LogLevel.NONE;
+            default:
+                return LogLevel.ERROR;
+        }
+    }
+    
+    /**
+     * 获取日志级别
+     */
+    public getLogLevel(): LogLevel {
+        return this.cachedConfig.logLevel;
+    }
+    
+    /**
+     * 设置日志级别
+     */
+    public async setLogLevel(level: LogLevel): Promise<void> {
+        const levelStr = LogLevel[level].toLowerCase();
+        await this.updateConfigValue('logging.level', levelStr);
+        this.logger.setLogLevel(level);
     }
     
     /**
@@ -216,13 +255,6 @@ export class ConfigManager {
      */
     public getMaxContextLines(): number {
         return this.cachedConfig.maxContextLines;
-    }
-    
-    /**
-     * 获取回车触发补全时的上下文行数
-     */
-    public getSurroundingLines(): number {
-        return this.cachedConfig.surroundingLines;
     }
     
     /**
@@ -367,35 +399,7 @@ export class ConfigManager {
      * 是否启用调试日志
      */
     public isDebugEnabled(): boolean {
-        return this.cachedConfig.debugEnabled;
-    }
-    
-    /**
-     * 获取日志级别
-     */
-    public getLogLevel(): string {
-        return this.cachedConfig.logLevel;
-    }
-    
-    /**
-     * 是否记录性能指标
-     */
-    public shouldLogPerformance(): boolean {
-        return this.cachedConfig.logPerformance;
-    }
-    
-    /**
-     * 启用调试模式
-     */
-    public async setDebugEnabled(enabled: boolean): Promise<void> {
-        await this.updateConfigValue('debug.enabled', enabled);
-    }
-    
-    /**
-     * 设置日志级别
-     */
-    public async setLogLevel(level: string): Promise<void> {
-        await this.updateConfigValue('debug.logLevel', level);
+        return this.getLogLevel() === LogLevel.DEBUG;
     }
     
     /**
@@ -456,5 +460,11 @@ export class ConfigManager {
     public getPromptTemplate(): string {
         return vscode.workspace.getConfiguration('tabAutoComplete').get('prompt.template', 
             '你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。\n\n上下文:\n```\n${prefix}\n```\n\n请直接补全代码:');
+    }
+
+    public dispose(): void {
+        if (this.configChangeListener) {
+            this.configChangeListener.dispose();
+        }
     }
 } 
