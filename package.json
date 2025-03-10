@@ -73,7 +73,7 @@
       {
         "command": "tabAutoComplete.acceptTabCompletion",
         "key": "tab",
-        "when": "editorTextFocus && !editorReadonly && !inlineSuggestionVisible && !suggestWidgetVisible"
+        "when": "editorTextFocus && !editorReadonly && !inlineSuggestionVisible && !suggestWidgetVisible && hasActivePreview"
       },
       {
         "command": "tabAutoComplete.handleEscape",

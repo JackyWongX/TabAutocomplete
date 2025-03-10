@@ -106,39 +106,32 @@ async function activate(context) {
         let debounceTimer = null;
         let isProcessingCompletion = false;
         let lastChangeTime = Date.now();
-        const typingListener = vscode.workspace.onDidChangeTextDocument(async (event) => {
-            // 忽略非文件编辑器的变化
-            if (event.document.uri.scheme !== 'file') {
-                return;
-            }
-            if (event.reason != 1) {
-                logger.debug('跳过非用户输入触发的补全请求' + event.reason);
-                return;
-            }
-            // 记录最后的文档变更事件
-            vscode.window.lastDocumentChangeEvent = event;
+        // 监听键盘事件
+        const keyPressListener = vscode.commands.registerCommand('type', async (args) => {
             // 获取活动编辑器
             const editor = vscode.window.activeTextEditor;
-            if (!editor || editor.document !== event.document) {
+            if (!editor) {
+                await vscode.commands.executeCommand('default:type', args);
                 return;
             }
-            // 如果有内容变化
-            if (event.contentChanges.length > 0) {
-                // 如果有预览内容，先清除预览（相当于用户拒绝了补全）
-                if (completionProvider.hasActivePreview()) {
-                    await completionProvider.clearPreview();
-                }
-                // 取消当前正在进行的补全请求
-                completionProvider.cancel();
+            // 检查输入的字符
+            const inputChar = args.text;
+            // 过滤掉控制字符和特殊按键
+            if (!isValidInputChar(inputChar)) {
+                await vscode.commands.executeCommand('default:type', args);
+                return;
             }
-            // 如果插件被禁用，直接返回
+            // 如果插件被禁用，直接执行默认输入
             if (!configManager.isEnabled()) {
+                await vscode.commands.executeCommand('default:type', args);
                 return;
             }
-            // 如果正在处理补全或有活动预览，则忽略
-            if (isProcessingCompletion || completionProvider.hasActivePreview()) {
-                return;
-            }
+            // 先执行默认的输入操作
+            await vscode.commands.executeCommand('default:type', args);
+            // 若又请求则取消
+            completionProvider.cancel();
+            // 若又预览则清除
+            await completionProvider.clearPreview();
             // 更新最后变更时间
             lastChangeTime = Date.now();
             // 清除之前的定时器
@@ -167,7 +160,7 @@ async function activate(context) {
                     // 创建取消令牌
                     const cancellationTokenSource = new vscode.CancellationTokenSource();
                     // 请求补全项
-                    const completionItems = await completionProvider.provideCompletionItems(editor.document, position, cancellationTokenSource.token, { triggerKind: vscode.CompletionTriggerKind.Invoke, triggerCharacter: '' });
+                    const completionItems = await completionProvider.provideCompletionItems(editor.document, position, cancellationTokenSource.token, { triggerKind: vscode.CompletionTriggerKind.TriggerCharacter, triggerCharacter: inputChar });
                     // 如果有补全项，显示第一个
                     if (completionItems) {
                         let items = [];
@@ -187,14 +180,38 @@ async function activate(context) {
                     }
                 }
                 catch (error) {
-                    logger.error('处理编辑器变化时出错', error);
+                    logger.error('处理键盘输入时出错', error);
                 }
                 finally {
                     isProcessingCompletion = false;
                 }
             }, configManager.getDebounceDelay());
         });
-        context.subscriptions.push(typingListener);
+        context.subscriptions.push(keyPressListener);
+        /**
+         * 检查是否是有效的输入字符
+         */
+        function isValidInputChar(char) {
+            // 如果是空字符串或长度不为1，返回false
+            if (!char || char.length !== 1) {
+                return false;
+            }
+            // 获取字符的Unicode码点
+            const code = char.charCodeAt(0);
+            // 检查是否是可打印字符或常用标点符号
+            const isPrintable = code > 31 && code < 127; // ASCII可打印字符
+            const isChineseChar = code >= 0x4E00 && code <= 0x9FFF; // 基本汉字范围
+            const isCommonPunctuation = [
+                '.', ',', ':', ';', '!', '?', '"', "'", '`',
+                '(', ')', '[', ']', '{', '}',
+                '+', '-', '*', '/', '=', '<', '>', '_',
+                '@', '#', '$', '%', '^', '&', '|', '\\',
+                '~'
+            ].includes(char);
+            // 检查是否是空格或换行（作为特殊的触发字符）
+            const isSpecialTrigger = [' ', '\n', '\t'].includes(char);
+            return isPrintable || isChineseChar || isCommonPunctuation || isSpecialTrigger;
+        }
         // 监听按键事件，处理ESC键
         const keyBindingListener = vscode.commands.registerCommand('tabAutoComplete.handleEscape', () => {
             if (completionProvider.hasActivePreview()) {
@@ -242,18 +259,6 @@ async function activate(context) {
             }
         });
         context.subscriptions.push(logCompletionOutcomeCommand);
-        // 保留文档变化的监听，但简化逻辑
-        const documentChangeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
-            // 过滤掉输出窗口和非文件方案的文档变化
-            if (event.document.uri.scheme !== 'file' ||
-                event.document.uri.toString().includes('extension-output')) {
-                return; // 忽略输出窗口和非文件的变化
-            }
-            if (shouldCacheChanges(event, configManager)) {
-                // 在此处可以添加代码缓存逻辑
-            }
-        });
-        context.subscriptions.push(documentChangeDisposable);
         // 标记补全提供程序为已注册
         completionProvider.setRegistered(true);
         logger.info('补全提供程序注册完成');
