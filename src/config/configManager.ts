@@ -33,7 +33,7 @@ export class ConfigManager {
         apiUrl: 'http://localhost:11434',
         modelName: 'qwen2.5-coder:1.5b',
         temperature: 0.3,
-        maxTokens: 300,
+        maxTokens: 3000,
         maxContextLines: 2000,
         includeImports: true,
         includeComments: true,

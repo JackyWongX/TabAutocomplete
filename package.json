@@ -98,13 +98,13 @@
         },
         "tabAutoComplete.model.maxTokens": {
           "type": "number",
-          "default": 300,
+          "default": 3000,
           "description": "每次补全生成的最大 token 数"
         },
         "tabAutoComplete.context.maxLines": {
           "type": "number",
-          "default": 100,
-          "description": "提供给模型的上下文最大行数"
+          "default": 2000,
+          "description": "提供给模型的上下文最大字符数"
         },
         "tabAutoComplete.context.includeImports": {
           "type": "boolean",
