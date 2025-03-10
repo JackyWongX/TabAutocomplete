@@ -168,28 +168,6 @@
           ],
           "description": "禁用代码补全的文件类型"
         },
-        "tabAutoComplete.debug.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "是否启用调试日志"
-        },
-        "tabAutoComplete.debug.logLevel": {
-          "type": "string",
-          "enum": [
-            "debug",
-            "info",
-            "warn",
-            "error",
-            "none"
-          ],
-          "default": "info",
-          "description": "日志级别 (debug, info, warn, error, none)"
-        },
-        "tabAutoComplete.debug.logPerformance": {
-          "type": "boolean",
-          "default": false,
-          "description": "是否记录性能指标"
-        },
         "tabAutoComplete.advanced.adaptToProjectSize": {
           "type": "boolean",
           "default": true,
