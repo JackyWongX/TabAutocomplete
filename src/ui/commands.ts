@@ -303,6 +303,9 @@ export class CommandManager implements vscode.Disposable {
             // 如果没有活动预览，执行默认的ESC行为
             vscode.commands.executeCommand('escape');
         }
+
+        // 取消请求
+        this.completionProvider.cancel();
     }
     
     /**
