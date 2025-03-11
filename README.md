@@ -8,7 +8,7 @@ TabAutoComplete 是一个强大的 VSCode 扩展，它可以连接到本地或�
 
 ## 演示
 
-![演示](images/show.gif)
+![演示](https://raw.githubusercontent.com/JackyWongX/TabAutocomplete/main/images/show.gif)
 
 ## 功能特点
 

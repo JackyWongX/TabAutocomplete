@@ -6,7 +6,7 @@ TabAutoComplete is a powerful VSCode extension that connects to your locally run
 
 ## Demo
 
-![Demo](images/show.gif)
+![Demo](https://raw.githubusercontent.com/JackyWongX/TabAutocomplete/main/images/show.gif)
 
 ## Features
 
