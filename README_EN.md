@@ -4,6 +4,10 @@
 
 TabAutoComplete is a powerful VSCode extension that connects to your locally running AI models through Ollama, DeepSeek, OpenAI, or SiliconFlow services to provide intelligent, context-aware code completion. By leveraging state-of-the-art language models, it offers smarter and more accurate code suggestions.
 
+## Demo
+
+![Demo](images/show.gif)
+
 ## Features
 
 - 🚀 **Intelligent Code Completion** - Context-aware code completion supporting multiple programming languages
@@ -36,6 +40,32 @@ Before using this extension, you need:
 5. Press `Esc` to ignore completion suggestions
 
 ## Configuration Options
+
+### Configuration Example
+
+```json
+{
+    "tabAutoComplete.models": [
+        {
+            "title": "qwen2.5-coder:7b",
+            "provider": "ollama",
+            "model": "qwen2.5-coder:7b",
+            "apiBase": "http://localhost:11434"
+        },
+        {
+            "title": "Qwen/Qwen2.5-Coder-7B-Instruct",
+            "provider": "openai",
+            "model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+            "apiBase": "https://api.siliconflow.cn/v1",
+            "apiKey": "xxx"
+        }
+    ],
+    "tabAutoComplete.selectedModelIndex": 1,
+    "tabAutoComplete.model.selectedModelName": "Qwen/Qwen2.5-Coder-7B-Instruct"
+}
+```
+
+The above configuration demonstrates how to configure both local Ollama models and cloud models (using SiliconFlow as an example). You can configure multiple models and select the current model using `selectedModelIndex`.
 
 ### General Settings
 
