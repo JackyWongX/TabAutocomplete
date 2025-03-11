@@ -16,7 +16,7 @@ export class StatusBarManager {
         );
         
         // 设置命令
-        this.statusBarItem.command = 'ollamaCodeCompletion.toggleEnabled';
+        this.statusBarItem.command = 'tabAutoComplete.toggleEnabled';
         
         // 初始化显示
         this.updateStatus();

@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
-import { OllamaClient } from '../api/ollamaClient';
 import { ConfigManager } from '../config/configManager';
-import { CacheManager } from '../cache/cacheManager';
 import { Logger } from '../utils/logger';
+import { CacheManager } from '../cache/cacheManager';
+import { BaseClient } from '../api/baseClient';
+import { ClientFactory } from '../api/clientFactory';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -10,12 +11,13 @@ import { v4 as uuidv4 } from 'uuid';
  * 负责分析用户代码，收集上下文，请求模型生成补全，并将补全内容应用到编辑器中
  */
 export class CompletionProvider implements vscode.CompletionItemProvider, vscode.Disposable {
-    private client: OllamaClient;
+    private client: BaseClient;
     private configManager: ConfigManager;
     private logger: Logger;
     private cacheManager: CacheManager;
     private statusBarItem: vscode.StatusBarItem;
     private diagnosticsCollection: vscode.DiagnosticCollection;
+    private clientFactory: ClientFactory;
 
     // 跟踪状态
     private isRegisteredFlag: boolean = false;
@@ -49,9 +51,30 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         this.cacheManager = cacheManager;
         this.statusBarItem = statusBarItem;
         this.diagnosticsCollection = diagnosticsCollection;
-        this.client = new OllamaClient(configManager);
+        
+        // 创建客户端工厂
+        this.clientFactory = new ClientFactory(configManager);
+        
+        // 创建API客户端
+        this.client = this.clientFactory.createClient(configManager.getSelectedModelConfig());
+        
+        // 监听配置变更，更新客户端
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('tabAutoComplete.selectedModelIndex') || 
+                e.affectsConfiguration('tabAutoComplete.models')) {
+                this.updateClient();
+            }
+        });
         
         this.logger.debug('CompletionProvider 已初始化');
+    }
+
+    /**
+     * 更新API客户端
+     */
+    private updateClient(): void {
+        this.client = this.clientFactory.createClient(this.configManager.getSelectedModelConfig());
+        this.logger.debug('已更新API客户端');
     }
 
     /**
@@ -418,10 +441,11 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                     this.logger.debug(`准备提示完成，提示长度: ${prompt.length}`);
                     
                     // 获取API配置
-                    const modelName = this.configManager.getModelName();
-                    const temperature = this.configManager.getTemperature();
-                    const maxTokens = this.configManager.getMaxTokens();
-                    this.logger.debug(`API配置: 模型=${modelName}, 温度=${temperature}, 最大token=${maxTokens}`);
+                    const selectedModelConfig = this.configManager.getSelectedModelConfig();
+                    const modelName = selectedModelConfig.model;
+                    const temperature = selectedModelConfig.temperature || this.configManager.getTemperature();
+                    const maxTokens = selectedModelConfig.maxTokens || this.configManager.getMaxTokens();
+                    this.logger.debug(`API配置: 提供商=${selectedModelConfig.provider}, 模型=${modelName}, 温度=${temperature}, 最大token=${maxTokens}, API基础URL=${selectedModelConfig.apiBase}`);
                     
                     // 请求模型生成补全
                     this.logger.debug('开始调用模型生成补全');
@@ -503,8 +527,8 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                 prefix: contextData.prefix,
                 suffix: contextData.suffix,
                 prompt: contextData.prompt,
-                modelProvider: 'ollama',
-                modelName: this.configManager.getModelName(),
+                modelProvider: this.configManager.getSelectedModelConfig().provider,
+                modelName: this.configManager.getSelectedModelConfig().model,
                 cacheHit,
                 filepath: document.uri.toString(),
                 numLines: completion.split("\n").length,

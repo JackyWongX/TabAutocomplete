@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import { CompletionProvider } from './providers/completionProvider';
-import { OllamaClient } from './api/ollamaClient';
 import { ConfigManager } from './config/configManager';
 import { CacheManager } from './cache/cacheManager';
 import { StatusBarManager } from './ui/statusBar';
 import { Logger, LogLevel } from './utils/logger';
 import { CommandManager } from './ui/commands';
+import { ClientFactory } from './api/clientFactory';
 
 /**
  * 激活插件
@@ -15,31 +15,45 @@ export async function activate(context: vscode.ExtensionContext) {
     // 初始化日志系统
     const logger = Logger.getInstance();
     
+    // 注册显示日志命令
+    const showLogsCommand = vscode.commands.registerCommand('tabAutoComplete.showLogs', () => {
+        logger.showOutputChannel();
+    });
+    context.subscriptions.push(showLogsCommand);
+    
     try {
         // 初始化配置管理器
         const configManager = new ConfigManager();
         
-        // 验证配置
-        if (!configManager.getApiUrl()) {
-            vscode.window.showErrorMessage('Ollama API URL未设置，请在设置中配置。');
-            return;
-        }
+        // 设置日志级别
+        logger.setLogLevel(configManager.getLogLevel());
+        logger.info('TabAutoComplete 插件已激活');
         
-        if (!configManager.getModelName()) {
-            vscode.window.showErrorMessage('Ollama模型名称未设置，请在设置中配置。');
+        // 验证配置
+        const selectedModel = configManager.getSelectedModelConfig();
+        if (!selectedModel) {
+            vscode.window.showErrorMessage('未找到可用的模型配置，请在设置中添加模型');
             return;
         }
         
         // 初始化缓存管理器
         const cacheManager = new CacheManager(context.globalState, configManager);
         
-        // 初始化Ollama客户端
-        const ollamaClient = new OllamaClient(configManager);
+        // 初始化客户端工厂
+        const clientFactory = new ClientFactory(configManager);
         
-        // 测试Ollama API连接
-        const connectionTest = await ollamaClient.testConnection();
-        if (!connectionTest.success) {
-            vscode.window.showWarningMessage(`无法连接到Ollama API: ${connectionTest.message}。请检查配置并确保Ollama服务正在运行。`);
+        // 测试API连接
+        try {
+            const client = clientFactory.createClient(selectedModel);
+            const connectionTest = await client.testConnection();
+            
+            if (!connectionTest.success) {
+                vscode.window.showWarningMessage(`无法连接到${selectedModel.provider}模型API: ${connectionTest.message}。请检查配置并确保服务正在运行。`);
+            } else {
+                logger.info(`成功连接到${selectedModel.provider}模型API: ${selectedModel.model}`);
+            }
+        } catch (error) {
+            vscode.window.showWarningMessage(`连接测试出错: ${error.message}`);
         }
         
         // 初始化状态栏
@@ -73,6 +87,15 @@ export async function activate(context: vscode.ExtensionContext) {
             );
             context.subscriptions.push(provider);
         }
+        
+        // 初始化命令管理器
+        const commandManager = new CommandManager(
+            configManager,
+            cacheManager,
+            completionProvider,
+            context
+        );
+        context.subscriptions.push(commandManager);
 
         // 监听编辑器内容变化事件，实现内联预览功能
         let debounceTimer: NodeJS.Timeout | null = null;
@@ -210,61 +233,35 @@ export async function activate(context: vscode.ExtensionContext) {
             return isPrintable || isChineseChar || isCommonPunctuation || isSpecialTrigger;
         }
 
-        // 监听按键事件，处理ESC键
-        const keyBindingListener = vscode.commands.registerCommand('tabAutoComplete.handleEscape', () => {
+        // 监听编辑器选择变化事件，处理ESC键
+        const selectionChangeListener = vscode.window.onDidChangeTextEditorSelection(event => {
+            // 检查是否按下了ESC键（通过检查最近的按键事件）
             if (completionProvider.hasActivePreview()) {
-                completionProvider.clearPreview();
+                // 当有活跃预览时，监听键盘事件
+                const activeEditor = vscode.window.activeTextEditor;
+                if (activeEditor && event.textEditor === activeEditor) {
+                    // 清除预览并取消补全请求
+                    // 注意：这里我们不能直接检测ESC键，但可以在选择变化时检查是否需要清除预览
+                    if (event.kind === vscode.TextEditorSelectionChangeKind.Keyboard) {
+                        completionProvider.clearPreview();
+                        completionProvider.cancel();
+                        completionProvider.lastShownCompletion = null;
+                    }
+                }
             }
-            // 取消当前的补全请求
-            completionProvider.cancel();
-            completionProvider.lastShownCompletion = null;
         });
-        context.subscriptions.push(keyBindingListener);
+        context.subscriptions.push(selectionChangeListener);
         
-        // 注册自动补全命令 - 修改为直接应用补全
-        const applyCompletionCommand = vscode.commands.registerTextEditorCommand('tabAutoComplete.applyCompletion',
-            (textEditor: vscode.TextEditor) => {
-                if (configManager.isEnabled() && textEditor && completionProvider.lastShownCompletion) {
-                    completionProvider.accept(completionProvider.lastShownCompletion.completionId);
-                }
-                else{
-                    // 执行 VS Code 的默认缩进操作
-                    vscode.commands.executeCommand('editor.action.indentLines').then(() => {
-                        // 缩进操作成功
-                    }, (error) => {
-                        console.error('Failed to execute default indent action:', error);
-                        textEditor.edit((editBuilder) => {
-                            const position = textEditor.selection.active;
-                            editBuilder.insert(position, '\t');
-                        });
-                    });
-                }
+        // 监听文档变化事件，用于缓存
+        const documentChangeListener = vscode.workspace.onDidChangeTextDocument(event => {
+            if (shouldCacheChanges(event, configManager)) {
+                cacheManager.cacheDocumentChanges(event);
             }
-        );
-        context.subscriptions.push(applyCompletionCommand);
-        
-        // 注册记录补全结果的命令
-        const logCompletionOutcomeCommand = vscode.commands.registerCommand(
-            'tabAutoComplete.logCompletionOutcome',
-            async (completionId: string, provider: CompletionProvider) => {
-                if (completionId && provider) {
-                    await provider.accept(completionId);
-                }
-            }
-        );
-        context.subscriptions.push(logCompletionOutcomeCommand);
-        
+        });
+        context.subscriptions.push(documentChangeListener);
+
         // 标记补全提供程序为已注册
         completionProvider.setRegistered(true);
-
-        // 注册命令
-        const commandManager = new CommandManager(
-            context,
-            configManager,
-            ollamaClient,
-            cacheManager,
-            statusBar
-        );
 
         // 显示欢迎信息 - 修改消息内容，删除连续补全的描述
         //vscode.window.showInformationMessage('tabAutoComplete代码补全扩展已激活。');

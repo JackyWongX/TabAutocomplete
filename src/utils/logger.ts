@@ -72,8 +72,10 @@ export class Logger {
 
     private log(level: LogLevel, message: string, data?: any): void {
         if(level < this.logLevel){return;}
+        // 确保警告和错误日志始终被记录，无论日志级别如何设置
+        const shouldLogMessage = this.shouldLog(level) || level === LogLevel.ERROR || level === LogLevel.WARN;
         
-        if (this.shouldLog(level)) {
+        if (shouldLogMessage) {
             const formattedMessage = this.formatMessage(level, message, data);
             this.outputChannel.appendLine(formattedMessage);
             
@@ -96,16 +98,18 @@ export class Logger {
 
     public warn(message: string, data?: any): void {
         this.log(LogLevel.WARN, message, data);
-        // 可选：显示警告通知
+        // 显示警告通知并在输出窗口中显示
         if (this.shouldLog(LogLevel.WARN)) {
             vscode.window.showWarningMessage(message);
+            this.outputChannel.show(true); // 保持焦点在编辑器
         }
     }
 
     public error(message: string, error?: any): void {
         this.log(LogLevel.ERROR, message, error);
-        // 始终显示错误通知
+        // 显示错误通知并在输出窗口中显示
         vscode.window.showErrorMessage(message);
+        this.outputChannel.show(true); // 保持焦点在编辑器
     }
 
     public setDebugEnabled(enabled: boolean): void {

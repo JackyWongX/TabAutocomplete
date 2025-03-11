@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Logger, LogLevel } from '../utils/logger';
+import { ModelConfig, ModelProvider } from '../api/baseClient';
 
 /**
  * 配置管理器
@@ -13,8 +14,6 @@ export class ConfigManager {
     private cachedConfig: {
         enabled: boolean;
         triggerDelay: number;
-        apiUrl: string;
-        modelName: string;
         temperature: number;
         maxTokens: number;
         maxContextLines: number;
@@ -27,11 +26,12 @@ export class ConfigManager {
         disabledFileTypes: string[] | string;
         logLevel: LogLevel;
         adaptToProjectSize: boolean;
+        models: ModelConfig[];
+        selectedModelIndex: number;
+        selectedModelName: string;
     } = {
         enabled: true,
         triggerDelay: 300,
-        apiUrl: 'http://localhost:11434',
-        modelName: 'qwen2.5-coder:1.5b',
         temperature: 0.3,
         maxTokens: 3000,
         maxContextLines: 2000,
@@ -43,7 +43,10 @@ export class ConfigManager {
         enabledFileTypes: ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*'],
         disabledFileTypes: ['.txt', '.log', '.json', '.yml', '.yaml'],
         logLevel: LogLevel.ERROR,
-        adaptToProjectSize: true
+        adaptToProjectSize: true,
+        models: [],
+        selectedModelIndex: 0,
+        selectedModelName: 'qwen2.5-coder:7b'
     };
     
     private logger: Logger;
@@ -74,9 +77,7 @@ export class ConfigManager {
         this.cachedConfig.enabled = config.get<boolean>('general.enabled', true);
         this.cachedConfig.triggerDelay = config.get<number>('general.triggerDelay', 300);
         
-        // 加载API设置
-        this.cachedConfig.apiUrl = config.get<string>('model.url', 'http://localhost:11434');
-        this.cachedConfig.modelName = config.get<string>('model.name', 'qwen2.5-coder:1.5b');
+        // 加载模型设置
         this.cachedConfig.temperature = config.get<number>('model.temperature', 0.3);
         this.cachedConfig.maxTokens = config.get<number>('model.maxTokens', 300);
         
@@ -94,12 +95,63 @@ export class ConfigManager {
         this.cachedConfig.enabledFileTypes = config.get<string[]>('fileTypes.enabled', ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb', '.html', '.css', '.md', '*']);
         this.cachedConfig.disabledFileTypes = config.get<string[]>('fileTypes.disabled', ['.txt', '.log', '.json', '.yml', '.yaml']);
         
-        // 日志设置
-        const logLevelStr = config.get<string>('logging.level', 'error');
-        this.cachedConfig.logLevel = this.parseLogLevel(logLevelStr);
+        // 日志级别
+        const logLevel = config.get<string>('logging.level', 'error');
+        this.cachedConfig.logLevel = this.parseLogLevel(logLevel);
         
         // 高级设置
         this.cachedConfig.adaptToProjectSize = config.get<boolean>('advanced.adaptToProjectSize', true);
+        
+        // 加载模型配置
+        this.cachedConfig.models = config.get<ModelConfig[]>('models', []);
+        
+        // 如果没有模型配置，添加默认模型
+        if (this.cachedConfig.models.length === 0) {
+            this.cachedConfig.models = [
+                {
+                    title: "默认Ollama模型",
+                    model: "qwen2.5-coder:7b",
+                    provider: ModelProvider.OLLAMA,
+                    apiBase: 'http://localhost:11434'
+                }
+            ];
+        }
+        
+        // 加载选择的模型索引
+        this.cachedConfig.selectedModelIndex = config.get<number>('selectedModelIndex', 0);
+        
+        // 加载选择的模型名称
+        this.cachedConfig.selectedModelName = config.get<string>('model.selectedModelName', '');
+        
+        // 如果selectedModelName为空，则使用索引对应的模型名称
+        if (!this.cachedConfig.selectedModelName && this.cachedConfig.models.length > 0) {
+            const index = Math.min(this.cachedConfig.selectedModelIndex, this.cachedConfig.models.length - 1);
+            this.cachedConfig.selectedModelName = this.cachedConfig.models[index].title;
+            this.logger.info(`未设置模型名称，使用索引 ${index} 对应的模型: ${this.cachedConfig.selectedModelName}`);
+        }
+        
+        // 根据selectedModelName查找对应的索引并更新selectedModelIndex
+        const modelIndex = this.cachedConfig.models.findIndex(model => model.title === this.cachedConfig.selectedModelName);
+        if (modelIndex !== -1) {
+            this.cachedConfig.selectedModelIndex = modelIndex;
+            this.logger.debug(`找到模型 "${this.cachedConfig.selectedModelName}" 的索引: ${modelIndex}`);
+        } else if (this.cachedConfig.models.length > 0) {
+            // 如果找不到匹配的模型名称，使用第一个模型
+            this.logger.warn(`未找到名为 "${this.cachedConfig.selectedModelName}" 的模型，使用第一个可用模型`);
+            this.cachedConfig.selectedModelName = this.cachedConfig.models[0].title;
+            this.cachedConfig.selectedModelIndex = 0;
+        } else {
+            this.logger.warn('没有可用的模型配置');
+        }
+        
+        // 确保选择的模型索引有效
+        if (this.cachedConfig.selectedModelIndex >= this.cachedConfig.models.length) {
+            this.logger.warn(`模型索引 ${this.cachedConfig.selectedModelIndex} 超出范围，重置为0`);
+            this.cachedConfig.selectedModelIndex = 0;
+            if (this.cachedConfig.models.length > 0) {
+                this.cachedConfig.selectedModelName = this.cachedConfig.models[0].title;
+            }
+        }
         
         // 更新Logger的日志级别
         this.logger.setLogLevel(this.cachedConfig.logLevel);
@@ -184,21 +236,38 @@ export class ConfigManager {
      * 获取API URL
      */
     public getApiUrl(): string {
-        return this.cachedConfig.apiUrl;
+        // 使用当前选择的模型的apiBase
+        const selectedModel = this.getSelectedModelConfig();
+        if (!selectedModel.apiBase) {
+            this.logger.warn(`模型 ${selectedModel.title} 未设置API地址，使用默认地址`);
+            return 'http://localhost:11434';
+        }
+        return selectedModel.apiBase;
     }
     
     /**
      * 获取模型名称
      */
     public getModelName(): string {
-        return this.cachedConfig.modelName;
+        // 返回当前选择的模型的model属性
+        const selectedModel = this.getSelectedModelConfig();
+        return selectedModel.model;
     }
     
     /**
      * 设置模型名称
+     * @deprecated 使用 setSelectedModelName 代替
      */
     public async setModelName(modelName: string): Promise<void> {
-        await this.updateConfigValue('model.name', modelName);
+        this.logger.warn('setModelName 方法已弃用，请使用 setSelectedModelName 代替');
+        
+        // 查找匹配的模型
+        const modelIndex = this.cachedConfig.models.findIndex(m => m.model === modelName);
+        if (modelIndex >= 0) {
+            await this.setSelectedModelIndex(modelIndex);
+        } else {
+            this.logger.warn(`未找到模型: ${modelName}`);
+        }
     }
     
     /**
@@ -462,9 +531,126 @@ export class ConfigManager {
             '你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。\n\n上下文:\n```\n${prefix}\n```\n\n请直接补全代码:');
     }
 
+    /**
+     * 获取当前选择的模型配置
+     */
+    public getSelectedModelConfig(): ModelConfig {
+        if (this.cachedConfig.models.length === 0) {
+            // 如果没有模型配置，返回默认配置
+            return {
+                title: "默认Ollama模型",
+                model: "qwen2.5-coder:7b",
+                provider: ModelProvider.OLLAMA,
+                apiBase: 'http://localhost:11434'
+            };
+        }
+        
+        // 返回当前选择的模型
+        return this.cachedConfig.models[this.cachedConfig.selectedModelIndex];
+    }
+    
+    /**
+     * 设置当前选择的模型索引
+     */
+    public async setSelectedModelIndex(index: number): Promise<void> {
+        if (index >= 0 && index < this.cachedConfig.models.length) {
+            await this.updateConfigValue('selectedModelIndex', index);
+            
+            // 同时更新selectedModelName
+            const modelName = this.cachedConfig.models[index].title;
+            await this.updateConfigValue('model.selectedModelName', modelName);
+        }
+    }
+    
+    /**
+     * 获取当前选择的模型名称
+     */
+    public getSelectedModelName(): string {
+        return this.cachedConfig.selectedModelName;
+    }
+    
+    /**
+     * 设置当前选择的模型名称
+     */
+    public async setSelectedModelName(modelName: string): Promise<void> {
+        // 查找模型在数组中的索引
+        const index = this.cachedConfig.models.findIndex(m => m.title === modelName);
+        
+        if (index >= 0) {
+            // 如果找到了模型，设置选择的索引和名称
+            await this.updateConfigValue('model.selectedModelName', modelName);
+            await this.updateConfigValue('selectedModelIndex', index);
+        } else if (this.cachedConfig.models.length > 0) {
+            // 如果没有找到模型，使用第一个模型
+            await this.updateConfigValue('model.selectedModelName', this.cachedConfig.models[0].title);
+            await this.updateConfigValue('selectedModelIndex', 0);
+        }
+    }
+    
+    /**
+     * 获取所有可用的模型配置
+     */
+    public getAvailableModels(): ModelConfig[] {
+        return this.cachedConfig.models;
+    }
+    
+    /**
+     * 添加模型配置
+     */
+    public async addModelConfig(modelConfig: ModelConfig): Promise<void> {
+        const models = [...this.cachedConfig.models, modelConfig];
+        await this.updateConfigValue('models', models);
+    }
+    
+    /**
+     * 更新模型配置
+     */
+    public async updateModelConfig(index: number, modelConfig: ModelConfig): Promise<void> {
+        const models = [...this.cachedConfig.models];
+        models[index] = modelConfig;
+        await this.updateConfigValue('models', models);
+    }
+    
+    /**
+     * 删除模型配置
+     */
+    public async deleteModelConfig(index: number): Promise<void> {
+        const models = this.cachedConfig.models.filter((_, i) => i !== index);
+        await this.updateConfigValue('models', models);
+        
+        // 如果删除的是当前选择的模型，重置选择的索引
+        if (index === this.cachedConfig.selectedModelIndex) {
+            await this.setSelectedModelIndex(0);
+        } else if (index < this.cachedConfig.selectedModelIndex) {
+            // 如果删除的模型在当前选择的模型之前，调整索引
+            await this.setSelectedModelIndex(this.cachedConfig.selectedModelIndex - 1);
+        }
+    }
+
     public dispose(): void {
         if (this.configChangeListener) {
             this.configChangeListener.dispose();
+        }
+    }
+
+    /**
+     * 设置当前选择的模型配置
+     */
+    public async setSelectedModelConfig(modelConfig: ModelConfig): Promise<void> {
+        // 查找模型在数组中的索引
+        const index = this.cachedConfig.models.findIndex(m => 
+            m.title === modelConfig.title && 
+            m.model === modelConfig.model && 
+            m.provider === modelConfig.provider
+        );
+        
+        if (index >= 0) {
+            // 如果找到了模型，设置选择的索引
+            await this.setSelectedModelIndex(index);
+        } else {
+            // 如果没有找到模型，添加到数组并设置为当前选择
+            await this.addModelConfig(modelConfig);
+            await this.setSelectedModelIndex(this.cachedConfig.models.length - 1);
         }
     }
 } 

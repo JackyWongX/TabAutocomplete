@@ -1,7 +1,7 @@
 {
   "name": "tab-auto-complete",
   "displayName": "TabAutoComplete",
-  "description": "使用本地部署的Ollama模型进行智能代码补全",
+  "description": "使用本地或云端模型进行智能代码补全",
   "version": "1.0.0",
   "engines": {
     "vscode": "^1.60.0"
@@ -15,7 +15,9 @@
     "ai",
     "ollama",
     "autocomplete",
-    "intellisense"
+    "intellisense",
+    "deepseek",
+    "openai"
   ],
   "activationEvents": [
     "onStartupFinished",
@@ -29,7 +31,8 @@
     "onCommand:tabAutoComplete.selectModel",
     "onCommand:tabAutoComplete.clearCache",
     "onCommand:tabAutoComplete.testConnection",
-    "onCommand:tabAutoComplete.showConfig"
+    "onCommand:tabAutoComplete.showConfig",
+    "onCommand:tabAutoComplete.manageModels"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -44,7 +47,7 @@
       },
       {
         "command": "tabAutoComplete.selectModel",
-        "title": "选择 Ollama 模型"
+        "title": "选择 AI 模型"
       },
       {
         "command": "tabAutoComplete.clearCache",
@@ -52,7 +55,7 @@
       },
       {
         "command": "tabAutoComplete.testConnection",
-        "title": "测试 Ollama 连接"
+        "title": "测试 AI 模型连接"
       },
       {
         "command": "tabAutoComplete.showConfig",
@@ -65,6 +68,10 @@
       {
         "command": "tabAutoComplete.handleEscape",
         "title": "处理ESC键"
+      },
+      {
+        "command": "tabAutoComplete.manageModels",
+        "title": "管理 AI 模型"
       }
     ],
     "keybindings": [
@@ -91,16 +98,6 @@
           "type": "number",
           "default": 300,
           "description": "触发代码补全的延迟时间（毫秒）"
-        },
-        "tabAutoComplete.model.url": {
-          "type": "string",
-          "default": "http://localhost:11434",
-          "description": "Ollama API 的 URL 地址"
-        },
-        "tabAutoComplete.model.name": {
-          "type": "string",
-          "default": "codellama:7b",
-          "description": "使用的 Ollama 模型名称"
         },
         "tabAutoComplete.model.temperature": {
           "type": "number",
@@ -183,6 +180,74 @@
           "type": "string",
           "default": "你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。\n\n上下文:\n```\n${prefix}\n```\n\n请直接补全代码:",
           "description": "代码补全提示模板。可以使用 ${prefix} 作为上下文占位符。"
+        },
+        "tabAutoComplete.models": {
+          "type": "array",
+          "default": [
+            {
+              "title": "qwen2.5-coder:7b",
+              "provider": "ollama",
+              "model": "qwen2.5-coder:7b",
+              "apiBase": "http://localhost:11434"
+            },
+            {
+              "title": "qwen2.5-coder:1.5b",
+              "provider": "ollama",
+              "model": "qwen2.5-coder:1.5b",
+              "apiBase": "http://localhost:11434"
+            }
+          ],
+          "description": "可用的AI模型配置列表",
+          "items": {
+            "type": "object",
+            "required": ["title", "provider", "model"],
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "模型显示名称"
+              },
+              "provider": {
+                "type": "string",
+                "enum": ["ollama", "deepseek", "openai", "siliconflow"],
+                "description": "模型提供商"
+              },
+              "model": {
+                "type": "string",
+                "description": "模型名称"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API密钥（仅适用于云端模型）"
+              },
+              "apiBase": {
+                "type": "string",
+                "description": "API基础URL"
+              },
+              "contextLength": {
+                "type": "number",
+                "description": "模型上下文长度"
+              },
+              "temperature": {
+                "type": "number",
+                "description": "生成温度"
+              },
+              "maxTokens": {
+                "type": "number",
+                "description": "最大生成token数"
+              }
+            }
+          }
+        },
+        "tabAutoComplete.selectedModelIndex": {
+          "type": "number",
+          "default": 0,
+          "description": "当前选择的模型索引"
+        },
+        "tabAutoComplete.model.selectedModelName": {
+          "type": "string",
+          "default": "qwen2.5-coder:7b",
+          "description": "当前选择的模型名称",
+          "markdownDescription": "当前选择的模型名称。请输入已在models配置中定义的模型的title属性值。"
         }
       }
     }

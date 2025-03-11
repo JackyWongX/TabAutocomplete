@@ -2,16 +2,29 @@ import axios from 'axios';
 import * as vscode from 'vscode';
 import { ConfigManager } from '../config/configManager';
 import { Logger } from '../utils/logger';
+import { BaseClient, ModelConfig, ModelProvider } from './baseClient';
 
 /**
  * Ollama API客户端
  * 负责与本地运行的Ollama服务通信，发送代码补全请求
  */
-export class OllamaClient {
+export class OllamaClient implements BaseClient {
     private logger: Logger;
+    private modelConfig: ModelConfig;
 
-    constructor(private configManager: ConfigManager) {
+    constructor(
+        private configManager: ConfigManager,
+        modelConfig?: ModelConfig
+    ) {
         this.logger = Logger.getInstance();
+        this.modelConfig = modelConfig || {
+            title: configManager.getModelName(),
+            model: configManager.getModelName(),
+            provider: ModelProvider.OLLAMA,
+            apiBase: configManager.getApiUrl(),
+            temperature: configManager.getTemperature(),
+            maxTokens: configManager.getMaxTokens()
+        };
     }
 
     /**
@@ -21,10 +34,10 @@ export class OllamaClient {
      */
     public async getCompletion(context: any): Promise<string | null> {
         try {
-            const apiUrl = this.configManager.getApiUrl();
-            const modelName = this.configManager.getModelName();
-            const temperature = this.configManager.getTemperature();
-            const maxTokens = this.configManager.getMaxTokens();
+            const apiUrl = this.modelConfig.apiBase || this.configManager.getApiUrl();
+            const modelName = this.modelConfig.model || this.configManager.getModelName();
+            const temperature = this.modelConfig.temperature || this.configManager.getTemperature();
+            const maxTokens = this.modelConfig.maxTokens || this.configManager.getMaxTokens();
             
             this.logger.debug(`使用模型: ${modelName}, 温度: ${temperature}, 最大令牌数: ${maxTokens}`);
             
@@ -607,10 +620,10 @@ export class OllamaClient {
      * 测试与Ollama服务的连接
      */
     public async testConnection(): Promise<{success: boolean, message: string, models?: string[]}> {
-        this.logger.info(`测试与 Ollama 服务的连接: ${this.configManager.getApiUrl()}`);
+        this.logger.info(`测试与 Ollama 服务的连接: ${this.modelConfig.apiBase || this.configManager.getApiUrl()}`);
         
         try {
-            const apiUrl = this.configManager.getApiUrl();
+            const apiUrl = this.modelConfig.apiBase || this.configManager.getApiUrl();
             
             // 添加详细诊断
             this.logger.debug(`系统信息: Node版本: ${process.version}, 平台: ${process.platform}`);
@@ -759,10 +772,10 @@ export class OllamaClient {
         signal?: AbortSignal
     ): Promise<string | null> {
         try {
-            const apiUrl = this.configManager.getApiUrl();
-            const modelName = options.model || this.configManager.getModelName();
-            const temperature = options.temperature !== undefined ? options.temperature : this.configManager.getTemperature();
-            const maxTokens = options.maxTokens || this.configManager.getMaxTokens();
+            const apiUrl = this.modelConfig.apiBase || this.configManager.getApiUrl();
+            const modelName = options.model || this.modelConfig.model || this.configManager.getModelName();
+            const temperature = options.temperature !== undefined ? options.temperature : this.modelConfig.temperature || this.configManager.getTemperature();
+            const maxTokens = options.maxTokens || this.modelConfig.maxTokens || this.configManager.getMaxTokens();
             
             this.logger.debug(`生成补全: API URL=${apiUrl}, 模型=${modelName}, 温度=${temperature}, 最大令牌数=${maxTokens}`);
             
