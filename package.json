@@ -2,7 +2,7 @@
   "name": "tab-auto-complete",
   "displayName": "TabAutoComplete",
   "description": "使用本地部署的Ollama模型进行智能代码补全",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -18,7 +18,18 @@
     "intellisense"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:python",
+    "onLanguage:java",
+    "*",
+    "onCommand:tabAutoComplete.enable",
+    "onCommand:tabAutoComplete.disable",
+    "onCommand:tabAutoComplete.selectModel",
+    "onCommand:tabAutoComplete.clearCache",
+    "onCommand:tabAutoComplete.testConnection",
+    "onCommand:tabAutoComplete.showConfig"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -210,5 +221,15 @@
     "axios": "^0.24.0",
     "lru-cache": "^6.0.0",
     "uuid": "^11.1.0"
+  },
+  "publisher": "tabautocomplete",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JackyWongX/TabAutocomplete"
+  },
+  "icon": "./images/icon.png",
+  "galleryBanner": {
+    "color": "#C80000",
+    "theme": "dark"
   }
 }
