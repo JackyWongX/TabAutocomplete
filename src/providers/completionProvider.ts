@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
-import { OllamaClient } from '../api/ollamaClient';
 import { ConfigManager } from '../config/configManager';
-import { CacheManager } from '../cache/cacheManager';
 import { Logger } from '../utils/logger';
+import { CacheManager } from '../cache/cacheManager';
+import { BaseClient } from '../api/baseClient';
+import { ClientFactory } from '../api/clientFactory';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -10,12 +11,13 @@ import { v4 as uuidv4 } from 'uuid';
  * 负责分析用户代码，收集上下文，请求模型生成补全，并将补全内容应用到编辑器中
  */
 export class CompletionProvider implements vscode.CompletionItemProvider, vscode.Disposable {
-    private client: OllamaClient;
+    private client: BaseClient;
     private configManager: ConfigManager;
     private logger: Logger;
     private cacheManager: CacheManager;
     private statusBarItem: vscode.StatusBarItem;
     private diagnosticsCollection: vscode.DiagnosticCollection;
+    private clientFactory: ClientFactory;
 
     // 跟踪状态
     private isRegisteredFlag: boolean = false;
@@ -49,9 +51,30 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         this.cacheManager = cacheManager;
         this.statusBarItem = statusBarItem;
         this.diagnosticsCollection = diagnosticsCollection;
-        this.client = new OllamaClient(configManager);
+        
+        // 创建客户端工厂
+        this.clientFactory = new ClientFactory(configManager);
+        
+        // 创建API客户端
+        this.client = this.clientFactory.createClient(configManager.getSelectedModelConfig());
+        
+        // 监听配置变更，更新客户端
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('tabAutoComplete.selectedModelIndex') || 
+                e.affectsConfiguration('tabAutoComplete.models')) {
+                this.updateClient();
+            }
+        });
         
         this.logger.debug('CompletionProvider 已初始化');
+    }
+
+    /**
+     * 更新API客户端
+     */
+    private updateClient(): void {
+        this.client = this.clientFactory.createClient(this.configManager.getSelectedModelConfig());
+        this.logger.debug('已更新API客户端');
     }
 
     /**
@@ -418,10 +441,11 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                     this.logger.debug(`准备提示完成，提示长度: ${prompt.length}`);
                     
                     // 获取API配置
-                    const modelName = this.configManager.getModelName();
-                    const temperature = this.configManager.getTemperature();
-                    const maxTokens = this.configManager.getMaxTokens();
-                    this.logger.debug(`API配置: 模型=${modelName}, 温度=${temperature}, 最大token=${maxTokens}`);
+                    const selectedModelConfig = this.configManager.getSelectedModelConfig();
+                    const modelName = selectedModelConfig.model;
+                    const temperature = selectedModelConfig.temperature || this.configManager.getTemperature();
+                    const maxTokens = selectedModelConfig.maxTokens || this.configManager.getMaxTokens();
+                    this.logger.debug(`API配置: 提供商=${selectedModelConfig.provider}, 模型=${modelName}, 温度=${temperature}, 最大token=${maxTokens}, API基础URL=${selectedModelConfig.apiBase}`);
                     
                     // 请求模型生成补全
                     this.logger.debug('开始调用模型生成补全');
@@ -503,8 +527,8 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
                 prefix: contextData.prefix,
                 suffix: contextData.suffix,
                 prompt: contextData.prompt,
-                modelProvider: 'ollama',
-                modelName: this.configManager.getModelName(),
+                modelProvider: this.configManager.getSelectedModelConfig().provider,
+                modelName: this.configManager.getSelectedModelConfig().model,
                 cacheHit,
                 filepath: document.uri.toString(),
                 numLines: completion.split("\n").length,
@@ -561,7 +585,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
     private preparePrompt(contextData: any): string {
         // 获取提示模板并替换占位符
         const template = this.configManager.getPromptTemplate();
-        return template.replace('${prefix}', contextData.prefix+"TODO\n"+contextData.suffix+"\n从TODO这一行开始补全，不要返回上下文中重复的内容");
+        return template.replace('${prefix}', contextData.prefix+"TODO"+contextData.suffix+"\n从TODO这一行开始补全，不要返回上下文中重复的内容");
     }
 
     /**
@@ -574,6 +598,7 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         
         // 移除可能的代码块标记
         let processedText = completion;
+        this.logger.debug('补全的内容如下\n', processedText);
         if (processedText.startsWith('```')) {
             const langMatch = processedText.match(/^```(\w+)\n/);
             if (langMatch) {
@@ -585,24 +610,93 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
         if (processedText.endsWith('```')) {
             processedText = processedText.substring(0, processedText.length - 3);
         }
-
-        let text = contextData.prefix + contextData.suffix;
-        const textlines = text.split('\n');
+        processedText = processedText.replace(/^\n+|\n+$/g, '');
         const processedTextlines = processedText.split('\n');
-        const textlinesset = new Set<string>();
-        for(const line of textlines){
-            textlinesset.add(line.trim());
-        }
 
-        let findnum = 0;
-        for(const line of processedTextlines){
-            if(textlinesset.has(line.trim())){
-                findnum++;
+        // 检查是否为单行补全
+        if (processedTextlines.length == 1) {
+            // 获取当前行的内容
+            const currentLine = contextData.prefix.split('\n').pop() || '';
+            // 如果补全内容以当前行结尾，说明是重复的
+            if (processedText.endsWith(currentLine)) {
+                this.logger.debug('跳过重复的单行补全内容');
+                return null;
             }
-        }
-        if(findnum == processedTextlines.length){
-            this.logger.debug('跳过完全重复的补全内容');
-            return null;
+            // 如果补全内容包含当前行，移除重复部分
+            if (processedText.includes(currentLine)) {
+                processedText = processedText.substring(currentLine.length);
+                this.logger.debug('移除单行补全中的重复内容');
+            }
+
+            // 检查当前行的最后一个单词是否与补全内容的开头重复
+            const currentWords = currentLine.trim().split(/\s+/);
+            const lastWord = currentWords[currentWords.length - 1];
+            if (lastWord && processedText.trimStart().startsWith(lastWord)) {
+                processedText = processedText.trimStart().substring(lastWord.length).trimStart();
+                this.logger.debug(`移除重复的开头单词: ${lastWord}`);
+            }
+            
+            // 检查当前行尾部和补全内容开头的重复
+            let maxOverlap = 0;
+            for (let i = 1; i <= Math.min(currentLine.length, processedText.length); i++) {
+                const suffix = currentLine.slice(-i);
+                const prefix = processedText.slice(0, i);
+                if (suffix === prefix) {
+                    maxOverlap = i;
+                }
+            }
+            if (maxOverlap > 0) {
+                processedText = processedText.slice(maxOverlap);
+                this.logger.debug(`移除重复的重叠部分，长度: ${maxOverlap}`);
+            }
+        } else {
+            // 多行补全的重复检查
+            let text = contextData.prefix + contextData.suffix;
+            const textlines = text.split('\n');
+            const textlinesset = new Set<string>();
+            for(const line of textlines){
+                textlinesset.add(line.trim());
+            }
+
+            // 获取当前行的内容和缩进
+            const currentLine = contextData.prefix.split('\n').pop() || '';
+            const currentIndent = currentLine.match(/^[\s\t]*/)?.[0] || '';
+            const currentWords = currentLine.trim().split(/\s+/);
+            const lastWord = currentWords[currentWords.length - 1];
+
+            // 检查第一行是否与当前行的最后一个单词重复
+            if (lastWord && processedTextlines[0].trimStart().startsWith(lastWord)) {
+                processedTextlines[0] = processedTextlines[0].trimStart().substring(lastWord.length).trimStart();
+                this.logger.debug(`移除多行补全第一行中重复的开头单词: ${lastWord}`);
+            }
+
+            // 检查每一行是否完全重复
+            const newLines: string[] = [];
+
+            // 处理所有行，第一行使用当前缩进，后续行增加一级缩进
+            for (let i = 0; i < processedTextlines.length; i++) {
+                const line = processedTextlines[i];
+                if (!textlinesset.has(line.trim())) {
+                    if (i === 0) {
+                        // 第一行使用当前行的缩进
+                        newLines.push(line);
+                    } else {
+                        // 后续行增加一级缩进（在当前缩进基础上再加一个缩进）
+                        newLines.push(currentIndent + line);
+                    }
+                } else {
+                    this.logger.debug(`跳过重复的行: ${line.trim()}`);
+                }
+            }
+
+            // 如果所有行都被移除了，返回null
+            if (newLines.length === 0) {
+                this.logger.debug('所有行都是重复的，跳过补全');
+                return null;
+            }
+
+            // 更新处理后的文本
+            processedText = newLines.join('\n');
         }
 
         return processedText;
@@ -954,6 +1048,12 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             this.lastPosition = position;
             this.lastPreviewPosition = position;
             this.originalPosition = position;
+            
+            // 将光标设置到预览内容的开头
+            editor.selection = new vscode.Selection(position, position);
+            
+            // 确保编辑器视图能看到光标位置
+            editor.revealRange(new vscode.Range(position, position));
             
             this.logger.debug(`预览已设置，直接插入了${lines.length}行内容`);
         } catch (error) {
