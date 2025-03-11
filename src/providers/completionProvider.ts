@@ -676,16 +676,12 @@ export class CompletionProvider implements vscode.CompletionItemProvider, vscode
             // 处理所有行，第一行使用当前缩进，后续行增加一级缩进
             for (let i = 0; i < processedTextlines.length; i++) {
                 const line = processedTextlines[i];
-                if (!textlinesset.has(line.trim())) {
-                    if (i === 0) {
-                        // 第一行使用当前行的缩进
-                        newLines.push(line);
-                    } else {
-                        // 后续行增加一级缩进（在当前缩进基础上再加一个缩进）
-                        newLines.push(currentIndent + line);
-                    }
+                if (i === 0) {
+                    // 第一行使用当前行的缩进
+                    newLines.push(line);
                 } else {
-                    this.logger.debug(`跳过重复的行: ${line.trim()}`);
+                    // 后续行增加一级缩进（在当前缩进基础上再加一个缩进）
+                    newLines.push(currentIndent + line);
                 }
             }
 
