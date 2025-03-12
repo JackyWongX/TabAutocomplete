@@ -69,36 +69,48 @@ TabAutoComplete 是一个强大的 VSCode 扩展，它可以连接到本地或�
 
 上述配置展示了如何同时配置本地Ollama模型和云端模型（以SiliconFlow为例）。您可以根据需要配置多个模型，并通过`selectedModelIndex`选择当前使用的模型。
 
-### 通用设置
+## 常见问题
 
-- `tabAutoComplete.general.enabled`: 启用或禁用代码补全功能
-- `tabAutoComplete.general.triggerDelay`: 触发代码补全的延迟时间（毫秒）
-- `tabAutoComplete.debounceDelay`: 输入防抖延迟时间（毫秒）
+### Q: 无法连接到 AI 服务
 
-### 模型设置
+确保:
+1. 对于本地模型，服务正在运行
+2. 对于云端模型，API密钥正确
+3. API基础URL配置正确
+4. 选择的模型可用
 
-- `tabAutoComplete.models`: 可用的AI模型配置列表
-- `tabAutoComplete.model.temperature`: 生成的温度参数 (0-1)
-- `tabAutoComplete.model.maxTokens`: 每次补全生成的最大 token 数
-- `tabAutoComplete.model.selectedModelName`: 当前选择的模型名称
+### Q: 代码补全速度较慢
 
-### 上下文设置
+可以尝试:
+- 使用更小的模型
+- 减少上下文字符数（`context.maxLines`）
+- 启用缓存功能
+- 增加触发延迟
+- 调整防抖延迟时间
 
-- `tabAutoComplete.context.maxLines`: 提供给模型的上下文最大字符数
-- `tabAutoComplete.context.includeImports`: 是否在上下文中包含导入/引用语句
-- `tabAutoComplete.context.includeComments`: 是否在上下文中包含注释
+### Q: 生成的代码质量不理想
 
-### 缓存设置
+建议:
+- 调低模型温度
+- 使用专门的代码模型
+- 适当增加上下文字符数
+- 调整提示模板
 
-- `tabAutoComplete.cache.enabled`: 是否启用代码补全缓存
-- `tabAutoComplete.cache.retentionPeriodHours`: 缓存保留时间（小时）
-- `tabAutoComplete.cache.maxSnippets`: 最大缓存条目数
+## 隐私说明
 
-### 文件类型设置
+- 对于本地模型：所有代码和数据仅与本地服务通信
+- 对于云端模型：数据仅发送到您配置的AI服务提供商
+- 缓存数据仅存储在本地
 
-- `tabAutoComplete.fileTypes.enabled`: 启用代码补全的文件类型
-- `tabAutoComplete.fileTypes.disabled`: 禁用代码补全的文件类型
+## 许可证
 
-### 高级设置
+- [MIT](LICENSE)
 
-- `
+## 贡献
+
+- [欢迎提交 Issue 和 Pull Request](https://github.com/JackyWongX/TabAutocomplete)
+
+## 致谢
+
+- [Ollama 项目](https://github.com/ollama/ollama)
+- [Visual Studio Code](https://github.com/microsoft/vscode) 
