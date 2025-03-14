@@ -63,7 +63,6 @@ TabAutoComplete 是一个强大的 VSCode 扩展，它可以连接到本地或�
         }
     ],
     "tabAutoComplete.selectedModelIndex": 1,
-    "tabAutoComplete.model.selectedModelName": "Qwen/Qwen2.5-Coder-7B-Instruct"
 }
 ```
 
