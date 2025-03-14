@@ -89,6 +89,68 @@
     "configuration": {
       "title": "TabAutoComplete",
       "properties": {
+        "tabAutoComplete.models": {
+          "type": "array",
+          "default": [
+            {
+              "title": "qwen2.5-coder:7b",
+              "provider": "ollama",
+              "model": "qwen2.5-coder:7b",
+              "apiBase": "http://localhost:11434"
+            },
+            {
+              "title": "qwen2.5-coder:1.5b",
+              "provider": "ollama",
+              "model": "qwen2.5-coder:1.5b",
+              "apiBase": "http://localhost:11434"
+            }
+          ],
+          "description": "可用的AI模型配置列表",
+          "items": {
+            "type": "object",
+            "required": ["title", "provider", "model"],
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "模型显示名称"
+              },
+              "provider": {
+                "type": "string",
+                "enum": ["ollama", "deepseek", "openai", "siliconflow"],
+                "description": "模型提供商"
+              },
+              "model": {
+                "type": "string",
+                "description": "模型名称"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API密钥（仅适用于云端模型）"
+              },
+              "apiBase": {
+                "type": "string",
+                "description": "API基础URL"
+              },
+              "contextLength": {
+                "type": "number",
+                "description": "模型上下文长度"
+              },
+              "temperature": {
+                "type": "number",
+                "description": "生成温度"
+              },
+              "maxTokens": {
+                "type": "number",
+                "description": "最大生成token数"
+              }
+            }
+          }
+        },
+        "tabAutoComplete.selectedModelIndex": {
+          "type": "number",
+          "default": 0,
+          "description": "当前选择的模型索引 从0开始"
+        },
         "tabAutoComplete.general.enabled": {
           "type": "boolean",
           "default": true,
@@ -180,74 +242,6 @@
           "type": "string",
           "default": "你是一个智能代码补全助手。请根据以下上下文补全代码，只需要补全光标处的代码且只返回补全的代码，不要包含任何解释或注释，补全的内容不要包含上下文中已存在的重复的内容。\n\n上下文:\n```\n${prefix}\n```\n\n请直接补全代码:",
           "description": "代码补全提示模板。可以使用 ${prefix} 作为上下文占位符。"
-        },
-        "tabAutoComplete.models": {
-          "type": "array",
-          "default": [
-            {
-              "title": "qwen2.5-coder:7b",
-              "provider": "ollama",
-              "model": "qwen2.5-coder:7b",
-              "apiBase": "http://localhost:11434"
-            },
-            {
-              "title": "qwen2.5-coder:1.5b",
-              "provider": "ollama",
-              "model": "qwen2.5-coder:1.5b",
-              "apiBase": "http://localhost:11434"
-            }
-          ],
-          "description": "可用的AI模型配置列表",
-          "items": {
-            "type": "object",
-            "required": ["title", "provider", "model"],
-            "properties": {
-              "title": {
-                "type": "string",
-                "description": "模型显示名称"
-              },
-              "provider": {
-                "type": "string",
-                "enum": ["ollama", "deepseek", "openai", "siliconflow"],
-                "description": "模型提供商"
-              },
-              "model": {
-                "type": "string",
-                "description": "模型名称"
-              },
-              "apiKey": {
-                "type": "string",
-                "description": "API密钥（仅适用于云端模型）"
-              },
-              "apiBase": {
-                "type": "string",
-                "description": "API基础URL"
-              },
-              "contextLength": {
-                "type": "number",
-                "description": "模型上下文长度"
-              },
-              "temperature": {
-                "type": "number",
-                "description": "生成温度"
-              },
-              "maxTokens": {
-                "type": "number",
-                "description": "最大生成token数"
-              }
-            }
-          }
-        },
-        "tabAutoComplete.selectedModelIndex": {
-          "type": "number",
-          "default": 0,
-          "description": "当前选择的模型索引"
-        },
-        "tabAutoComplete.model.selectedModelName": {
-          "type": "string",
-          "default": "qwen2.5-coder:7b",
-          "description": "当前选择的模型名称",
-          "markdownDescription": "当前选择的模型名称。请输入已在models配置中定义的模型的title属性值。"
         }
       }
     }

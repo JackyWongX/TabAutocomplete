@@ -28,7 +28,6 @@ export class ConfigManager {
         adaptToProjectSize: boolean;
         models: ModelConfig[];
         selectedModelIndex: number;
-        selectedModelName: string;
     } = {
         enabled: true,
         triggerDelay: 300,
@@ -45,8 +44,7 @@ export class ConfigManager {
         logLevel: LogLevel.ERROR,
         adaptToProjectSize: true,
         models: [],
-        selectedModelIndex: 0,
-        selectedModelName: 'qwen2.5-coder:7b'
+        selectedModelIndex: 0
     };
     
     private logger: Logger;
@@ -120,37 +118,10 @@ export class ConfigManager {
         // 加载选择的模型索引
         this.cachedConfig.selectedModelIndex = config.get<number>('selectedModelIndex', 0);
         
-        // 加载选择的模型名称
-        this.cachedConfig.selectedModelName = config.get<string>('model.selectedModelName', '');
-        
-        // 如果selectedModelName为空，则使用索引对应的模型名称
-        if (!this.cachedConfig.selectedModelName && this.cachedConfig.models.length > 0) {
-            const index = Math.min(this.cachedConfig.selectedModelIndex, this.cachedConfig.models.length - 1);
-            this.cachedConfig.selectedModelName = this.cachedConfig.models[index].title;
-            this.logger.info(`未设置模型名称，使用索引 ${index} 对应的模型: ${this.cachedConfig.selectedModelName}`);
-        }
-        
-        // 根据selectedModelName查找对应的索引并更新selectedModelIndex
-        const modelIndex = this.cachedConfig.models.findIndex(model => model.title === this.cachedConfig.selectedModelName);
-        if (modelIndex !== -1) {
-            this.cachedConfig.selectedModelIndex = modelIndex;
-            this.logger.debug(`找到模型 "${this.cachedConfig.selectedModelName}" 的索引: ${modelIndex}`);
-        } else if (this.cachedConfig.models.length > 0) {
-            // 如果找不到匹配的模型名称，使用第一个模型
-            this.logger.warn(`未找到名为 "${this.cachedConfig.selectedModelName}" 的模型，使用第一个可用模型`);
-            this.cachedConfig.selectedModelName = this.cachedConfig.models[0].title;
-            this.cachedConfig.selectedModelIndex = 0;
-        } else {
-            this.logger.warn('没有可用的模型配置');
-        }
-        
         // 确保选择的模型索引有效
-        if (this.cachedConfig.selectedModelIndex >= this.cachedConfig.models.length) {
+        if (this.cachedConfig.selectedModelIndex >= this.cachedConfig.models.length && this.cachedConfig.models.length > 0) {
             this.logger.warn(`模型索引 ${this.cachedConfig.selectedModelIndex} 超出范围，重置为0`);
             this.cachedConfig.selectedModelIndex = 0;
-            if (this.cachedConfig.models.length > 0) {
-                this.cachedConfig.selectedModelName = this.cachedConfig.models[0].title;
-            }
         }
         
         // 更新Logger的日志级别
@@ -256,10 +227,10 @@ export class ConfigManager {
     
     /**
      * 设置模型名称
-     * @deprecated 使用 setSelectedModelName 代替
+     * @deprecated 使用 setSelectedModelIndex 代替
      */
     public async setModelName(modelName: string): Promise<void> {
-        this.logger.warn('setModelName 方法已弃用，请使用 setSelectedModelName 代替');
+        this.logger.warn('setModelName 方法已弃用，请使用 setSelectedModelIndex 代替');
         
         // 查找匹配的模型
         const modelIndex = this.cachedConfig.models.findIndex(m => m.model === modelName);
@@ -555,10 +526,6 @@ export class ConfigManager {
     public async setSelectedModelIndex(index: number): Promise<void> {
         if (index >= 0 && index < this.cachedConfig.models.length) {
             await this.updateConfigValue('selectedModelIndex', index);
-            
-            // 同时更新selectedModelName
-            const modelName = this.cachedConfig.models[index].title;
-            await this.updateConfigValue('model.selectedModelName', modelName);
         }
     }
     
@@ -566,25 +533,9 @@ export class ConfigManager {
      * 获取当前选择的模型名称
      */
     public getSelectedModelName(): string {
-        return this.cachedConfig.selectedModelName;
-    }
-    
-    /**
-     * 设置当前选择的模型名称
-     */
-    public async setSelectedModelName(modelName: string): Promise<void> {
-        // 查找模型在数组中的索引
-        const index = this.cachedConfig.models.findIndex(m => m.title === modelName);
-        
-        if (index >= 0) {
-            // 如果找到了模型，设置选择的索引和名称
-            await this.updateConfigValue('model.selectedModelName', modelName);
-            await this.updateConfigValue('selectedModelIndex', index);
-        } else if (this.cachedConfig.models.length > 0) {
-            // 如果没有找到模型，使用第一个模型
-            await this.updateConfigValue('model.selectedModelName', this.cachedConfig.models[0].title);
-            await this.updateConfigValue('selectedModelIndex', 0);
-        }
+        // 通过 selectedModelIndex 获取模型名称
+        const selectedModel = this.getSelectedModelConfig();
+        return selectedModel.title;
     }
     
     /**

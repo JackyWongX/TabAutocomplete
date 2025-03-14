@@ -73,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext) {
             diagnosticsCollection,
             context
         );
-
+        
         // 注册补全提供程序
         const supportedLanguages = ['javascript', 'typescript', 'python', 'java', 'c', 'cpp', 'csharp', 'go', 'rust', 'php', 'ruby', 'html', 'css', 'markdown'];
         

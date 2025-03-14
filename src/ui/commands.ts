@@ -118,9 +118,12 @@ export class CommandManager implements vscode.Disposable {
         });
         
         if (selected) {
-            // 更新选择的模型名称
+            // 更新选择的模型索引
             logger.info(`用户选择了模型: ${selected.label} (${selected.description})`);
-            await this.configManager.setSelectedModelName(selected.label);
+            const modelIndex = this.configManager.getAvailableModels().findIndex(m => m.title === selected.label);
+            if (modelIndex >= 0) {
+                await this.configManager.setSelectedModelIndex(modelIndex);
+            }
             
             // 显示更详细的信息
             const message = `已选择模型: ${selected.label}\n提供商: ${selected.model.provider}\n模型: ${selected.model.model}\nAPI地址: ${selected.model.apiBase || '默认'}`;
