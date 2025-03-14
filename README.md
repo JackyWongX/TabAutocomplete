@@ -25,7 +25,7 @@ TabAutoComplete 是一个强大的 VSCode 扩展，它可以连接到本地或�
 使用此扩展前，您需要：
 
 1. 对于本地模型：安装并运行 [Ollama](https://github.com/ollama/ollama)
-2. 对于云端模型：获取相应服务商（DeepSeek、OpenAI 或 SiliconFlow）的 API 密钥
+2. 对于云端模型：获取相应服务商（DeepSeek、OpenAI 或 SiliconFlow）的 API 密钥以及URL
 
 ## 安装
 
