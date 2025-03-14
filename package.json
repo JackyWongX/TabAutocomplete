@@ -2,7 +2,7 @@
   "name": "tab-auto-complete",
   "displayName": "TabAutocomplete",
   "description": "使用本地或云端模型进行智能代码补全",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "engines": {
     "vscode": "^1.60.0"
   },
