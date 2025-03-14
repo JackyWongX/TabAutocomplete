@@ -62,13 +62,15 @@ TabAutoComplete 是一个强大的 VSCode 扩展，它可以连接到本地或�
             "apiKey": "xxx"
         }
     ],
-    "tabAutoComplete.selectedModelIndex": 1,
+    "tabAutoComplete.selectedModelIndex": 1
 }
 ```
 
 上述配置展示了如何同时配置本地Ollama模型和云端模型（以SiliconFlow为例）。您可以根据需要配置多个模型，并通过`selectedModelIndex`选择当前使用的模型。
 
 ## 常见问题
+- 插件不能正常工作时，在插件设置中修改日志输出级别，按 Shift + Ctrl + U 打开输出窗，选择TabAutoComplete查看是否有错误信息
+
 
 ### Q: 无法连接到 AI 服务
 

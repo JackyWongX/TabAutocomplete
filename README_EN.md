@@ -60,60 +60,11 @@ Before using this extension, you need:
             "apiKey": "xxx"
         }
     ],
-    "tabAutoComplete.selectedModelIndex": 1,
-    "tabAutoComplete.model.selectedModelName": "Qwen/Qwen2.5-Coder-7B-Instruct"
+    "tabAutoComplete.selectedModelIndex": 1
 }
 ```
 
 The above configuration demonstrates how to configure both local Ollama models and cloud models (using SiliconFlow as an example). You can configure multiple models and select the current model using `selectedModelIndex`.
-
-### General Settings
-
-- `tabAutoComplete.general.enabled`: Enable or disable code completion
-- `tabAutoComplete.general.triggerDelay`: Delay before triggering code completion (ms)
-- `tabAutoComplete.debounceDelay`: Input debounce delay (ms)
-
-### Model Settings
-
-- `tabAutoComplete.models`: List of available AI model configurations
-- `tabAutoComplete.model.temperature`: Generation temperature parameter (0-1)
-- `tabAutoComplete.model.maxTokens`: Maximum tokens per completion
-- `tabAutoComplete.model.selectedModelName`: Currently selected model name
-
-### Context Settings
-
-- `tabAutoComplete.context.maxLines`: Maximum context lines for the model
-- `tabAutoComplete.context.includeImports`: Include import/reference statements in context
-- `tabAutoComplete.context.includeComments`: Include comments in context
-
-### Cache Settings
-
-- `tabAutoComplete.cache.enabled`: Enable code completion cache
-- `tabAutoComplete.cache.retentionPeriodHours`: Cache retention period (hours)
-- `tabAutoComplete.cache.maxSnippets`: Maximum cache entries
-
-### File Type Settings
-
-- `tabAutoComplete.fileTypes.enabled`: File types to enable code completion
-- `tabAutoComplete.fileTypes.disabled`: File types to disable code completion
-
-### Advanced Settings
-
-- `tabAutoComplete.advanced.adaptToProjectSize`: Auto-adjust parameters based on project size
-- `tabAutoComplete.prompt.template`: Custom code completion prompt template
-- `tabAutoComplete.logging.level`: Logging level settings
-
-## Commands
-
-Access these commands via `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (macOS):
-
-- `TabAutoComplete: Enable` - Enable the extension
-- `TabAutoComplete: Disable` - Disable the extension
-- `TabAutoComplete: Select Model` - Change the AI model
-- `TabAutoComplete: Clear Cache` - Clear completion cache
-- `TabAutoComplete: Test Connection` - Test AI service connection
-- `TabAutoComplete: Show Config` - View current settings
-- `TabAutoComplete: Manage Models` - Manage AI models
 
 ## FAQ
 
